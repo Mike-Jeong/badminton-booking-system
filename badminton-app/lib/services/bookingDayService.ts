@@ -148,7 +148,17 @@ async function assertSlotsNotBelowConfirmed(
   }
 }
 
-export async function createBookingDay(input: BookingDayInput) {
+export interface CreateBookingDayOptions {
+  /**
+   * 예약일 생성 직후 월 멤버 자동 배정을 실행할지 여부(decisions.md D-19).
+   * 기본값 true. 같은 요일에 세션이 여러 개 열리는 경우, 관리자가 화면에서 확인 대화상자를
+   * 통해 false를 선택하면 이 예약일에는 월 멤버가 자동으로 추가되지 않는다(필요하면 예약일
+   * 상세 화면의 수동 "월 멤버 자동 배정" 버튼으로 나중에 실행 가능).
+   */
+  autoAssignMonthlyMembers?: boolean;
+}
+
+export async function createBookingDay(input: BookingDayInput, options: CreateBookingDayOptions = {}) {
   if (!isValidDateOnly(input.date)) {
     throw new ValidationError("date는 YYYY-MM-DD 형식이어야 합니다.");
   }
@@ -190,7 +200,10 @@ export async function createBookingDay(input: BookingDayInput) {
     },
   });
 
-  const monthlyMemberAssignment = await applyMonthlyMembersToBookingDay(bookingDay.id);
+  const autoAssign = options.autoAssignMonthlyMembers ?? true;
+  const monthlyMemberAssignment = autoAssign
+    ? await applyMonthlyMembersToBookingDay(bookingDay.id)
+    : null;
 
   return { ...bookingDay, monthlyMemberAssignment };
 }

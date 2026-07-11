@@ -19,19 +19,22 @@ export const POST = withApiHandler(async (req: NextRequest) => {
     throw new ValidationError("요청 본문이 필요합니다.");
   }
 
-  const bookingDay = await createBookingDay({
-    date: body.date,
-    label: body.label ?? null,
-    startTime: body.startTime,
-    endTime: body.endTime,
-    location: body.location,
-    dutyPerson: body.dutyPerson,
-    totalSlots: Number(body.totalSlots),
-    annualSlots: body.annualSlots !== undefined ? Number(body.annualSlots) : undefined,
-    casualSlots: body.casualSlots !== undefined ? Number(body.casualSlots) : undefined,
-    slotMode: body.slotMode as SlotMode,
-    isOpen: body.isOpen ?? true,
-  });
+  const bookingDay = await createBookingDay(
+    {
+      date: body.date,
+      label: body.label ?? null,
+      startTime: body.startTime,
+      endTime: body.endTime,
+      location: body.location,
+      dutyPerson: body.dutyPerson,
+      totalSlots: Number(body.totalSlots),
+      annualSlots: body.annualSlots !== undefined ? Number(body.annualSlots) : undefined,
+      casualSlots: body.casualSlots !== undefined ? Number(body.casualSlots) : undefined,
+      slotMode: body.slotMode as SlotMode,
+      isOpen: body.isOpen ?? true,
+    },
+    { autoAssignMonthlyMembers: body.autoAssignMonthlyMembers ?? true }
+  );
 
   return jsonOk(bookingDay, 201);
 });

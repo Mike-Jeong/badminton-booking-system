@@ -33,6 +33,7 @@ export function CreateBookingDayForm() {
     createdCount: number;
     skippedCount: number;
   } | null>(null);
+  const [assignmentSkipped, setAssignmentSkipped] = useState(false);
 
   function update<K extends keyof typeof initialState>(key: K, value: (typeof initialState)[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -45,6 +46,14 @@ export function CreateBookingDayForm() {
     e.preventDefault();
     setError(null);
     setAssignmentResult(null);
+    setAssignmentSkipped(false);
+
+    // 같은 요일에 세션이 여러 개 열리는 경우 월 멤버가 모든 세션에 중복 배정되는 것을
+    // 막기 위해, 생성 시점에 자동 배정 여부를 관리자에게 직접 확인한다(decisions.md D-19).
+    const autoAssignMonthlyMembers = window.confirm(
+      "이 요일과 일치하는 월 멤버를 이 예약일에 자동으로 추가하시겠습니까?\n(같은 요일에 다른 세션이 이미 있다면 '취소'를 눌러 건너뛸 수 있습니다.)"
+    );
+
     setLoading(true);
     try {
       const res = await fetch("/api/admin/booking-days", {
@@ -62,6 +71,7 @@ export function CreateBookingDayForm() {
           annualSlots: isSeparated ? Number(form.annualSlots || 0) : undefined,
           casualSlots: isSeparated ? Number(form.casualSlots || 0) : undefined,
           isOpen: form.isOpen,
+          autoAssignMonthlyMembers,
         }),
       });
       const json = await res.json();
@@ -72,6 +82,8 @@ export function CreateBookingDayForm() {
       setForm(initialState);
       if (json.data?.monthlyMemberAssignment) {
         setAssignmentResult(json.data.monthlyMemberAssignment);
+      } else if (!autoAssignMonthlyMembers) {
+        setAssignmentSkipped(true);
       }
       router.refresh();
     } catch {
@@ -227,6 +239,11 @@ export function CreateBookingDayForm() {
             <p aria-live="polite" className="col-span-full text-sm text-muted-foreground">
               월 멤버 자동 배정: 생성 {assignmentResult.createdCount}건 · 스킵{" "}
               {assignmentResult.skippedCount}건
+            </p>
+          )}
+          {assignmentSkipped && (
+            <p aria-live="polite" className="col-span-full text-sm text-muted-foreground">
+              월 멤버 자동 배정을 건너뛰었습니다. 필요하면 예약일 상세 화면에서 수동으로 실행할 수 있습니다.
             </p>
           )}
 
