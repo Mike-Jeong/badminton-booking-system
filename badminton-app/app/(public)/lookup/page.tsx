@@ -1,13 +1,18 @@
+"use client";
+
 import { CancelLookup } from "@/components/public/CancelLookup";
+import { useLocale } from "@/lib/i18n/LanguageContext";
+import { dictionary } from "@/lib/i18n/dictionary";
 
 export default function LookupPage() {
+  const { locale } = useLocale();
+  const t = dictionary[locale].lookup;
+
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-xl font-bold">내 예약 조회/취소</h2>
-        <p className="text-sm text-muted-foreground">
-          전화번호를 입력하면 등록된 예약 목록을 확인하고 취소할 수 있습니다.
-        </p>
+        <h2 className="text-xl font-bold">{t.heading}</h2>
+        <p className="text-sm text-muted-foreground">{t.subheading}</p>
       </div>
       <CancelLookup />
     </div>

@@ -6,9 +6,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useLocale } from "@/lib/i18n/LanguageContext";
+import { dictionary, translateApiErrorMessage } from "@/lib/i18n/dictionary";
 
 export function BookingForm({ bookingDayId }: { bookingDayId: string }) {
   const router = useRouter();
+  const { locale } = useLocale();
+  const t = dictionary[locale].form;
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -28,7 +32,7 @@ export function BookingForm({ bookingDayId }: { bookingDayId: string }) {
       });
       const json = await res.json();
       if (!res.ok) {
-        setError(json?.error?.message ?? "예약 신청에 실패했습니다.");
+        setError(json?.error?.message ? translateApiErrorMessage(locale, json.error.message) : t.fallbackError);
         return;
       }
       setResult(json.data.status);
@@ -36,7 +40,7 @@ export function BookingForm({ bookingDayId }: { bookingDayId: string }) {
       setPhone("");
       router.refresh();
     } catch {
-      setError("네트워크 오류가 발생했습니다.");
+      setError(t.networkError);
     } finally {
       setLoading(false);
     }
@@ -45,20 +49,20 @@ export function BookingForm({ bookingDayId }: { bookingDayId: string }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>예약 신청</CardTitle>
+        <CardTitle>{t.title}</CardTitle>
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="booking-name">이름</Label>
+            <Label htmlFor="booking-name">{t.name}</Label>
             <Input id="booking-name" value={name} onChange={(e) => setName(e.target.value)} required />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="booking-phone">전화번호</Label>
+            <Label htmlFor="booking-phone">{t.phone}</Label>
             <Input
               id="booking-phone"
               type="tel"
-              placeholder="010-1234-5678"
+              placeholder={t.phonePlaceholder}
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
               required
@@ -67,12 +71,12 @@ export function BookingForm({ bookingDayId }: { bookingDayId: string }) {
 
           {result === "CONFIRMED" && (
             <p aria-live="polite" className="text-sm font-medium text-primary">
-              예약이 확정되었습니다.
+              {t.resultConfirmed}
             </p>
           )}
           {result === "WAITING" && (
             <p aria-live="polite" className="text-sm font-medium text-muted-foreground">
-              슬롯이 가득 차 대기 명단에 등록되었습니다.
+              {t.resultWaiting}
             </p>
           )}
           {error && (
@@ -82,7 +86,7 @@ export function BookingForm({ bookingDayId }: { bookingDayId: string }) {
           )}
 
           <Button type="submit" disabled={loading}>
-            {loading ? "신청 중..." : "예약 신청"}
+            {loading ? t.submitting : t.submit}
           </Button>
         </form>
       </CardContent>

@@ -160,8 +160,14 @@ export function addDaysToDateOnly(dateOnly: string, days: number): string {
 }
 
 const DAY_OF_WEEK_LABELS_KO = ["일", "월", "화", "수", "목", "금", "토"];
+const DAY_OF_WEEK_LABELS_EN = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-/** dayOfWeek(0=일~6=토) 정수를 한글 요일 라벨로 변환한다. 화면 표시 전용. */
+/** dayOfWeek(0=일~6=토) 정수를 한글 요일 라벨로 변환한다. 화면 표시 전용(관리자 화면용). */
 export function getDayOfWeekLabelKo(dayOfWeek: number): string {
   return DAY_OF_WEEK_LABELS_KO[dayOfWeek] ?? "?";
+}
+
+/** dayOfWeek(0=일~6=토) 정수를 locale에 맞는 요일 라벨로 변환한다(공개 화면 다국어용, decisions.md D-18). */
+export function getDayOfWeekLabel(dayOfWeek: number, locale: "ko" | "en"): string {
+  return locale === "ko" ? getDayOfWeekLabelKo(dayOfWeek) : (DAY_OF_WEEK_LABELS_EN[dayOfWeek] ?? "?");
 }

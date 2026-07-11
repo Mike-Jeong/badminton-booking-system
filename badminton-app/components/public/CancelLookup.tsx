@@ -15,6 +15,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatDateOnlyInTimeZone } from "@/lib/timezone";
+import { useLocale } from "@/lib/i18n/LanguageContext";
+import { dictionary, translateApiErrorMessage } from "@/lib/i18n/dictionary";
 
 interface LookupBooking {
   id: string;
@@ -25,17 +27,13 @@ interface LookupBooking {
   bookingDay: { id: string; date: string; label: string | null; location: string };
 }
 
-const STATUS_LABEL: Record<LookupBooking["status"], string> = {
-  CONFIRMED: "확정",
-  WAITING: "대기",
-  CANCELLED: "취소됨",
-};
-
 /**
  * 예약 취소 2단계 플로우(requirements.md 14번, decisions.md D-03):
  * 전화번호로 목록 조회 -> bookingId 선택 -> 취소.
  */
 export function CancelLookup() {
+  const { locale } = useLocale();
+  const t = dictionary[locale].lookup;
   const [phone, setPhone] = useState("");
   const [bookings, setBookings] = useState<LookupBooking[] | null>(null);
   const [lookupError, setLookupError] = useState<string | null>(null);
@@ -55,20 +53,20 @@ export function CancelLookup() {
       });
       const json = await res.json();
       if (!res.ok) {
-        setLookupError(json?.error?.message ?? "조회에 실패했습니다.");
+        setLookupError(json?.error?.message ? translateApiErrorMessage(locale, json.error.message) : t.fallbackError);
         setBookings(null);
         return;
       }
       setBookings(json.data);
     } catch {
-      setLookupError("네트워크 오류가 발생했습니다.");
+      setLookupError(t.networkError);
     } finally {
       setLookupLoading(false);
     }
   }
 
   async function handleCancel(bookingId: string) {
-    if (!window.confirm("이 예약을 취소하시겠습니까?")) return;
+    if (!window.confirm(t.confirmDialog)) return;
     setCancellingId(bookingId);
     setRowError((prev) => ({ ...prev, [bookingId]: "" }));
     try {
@@ -79,7 +77,12 @@ export function CancelLookup() {
       });
       const json = await res.json();
       if (!res.ok) {
-        setRowError((prev) => ({ ...prev, [bookingId]: json?.error?.message ?? "취소에 실패했습니다." }));
+        setRowError((prev) => ({
+          ...prev,
+          [bookingId]: json?.error?.message
+            ? translateApiErrorMessage(locale, json.error.message)
+            : t.cancelFallbackError,
+        }));
         return;
       }
       setBookings(
@@ -87,7 +90,7 @@ export function CancelLookup() {
           prev?.map((b) => (b.id === bookingId ? { ...b, status: "CANCELLED" as const } : b)) ?? null
       );
     } catch {
-      setRowError((prev) => ({ ...prev, [bookingId]: "네트워크 오류가 발생했습니다." }));
+      setRowError((prev) => ({ ...prev, [bookingId]: t.networkError }));
     } finally {
       setCancellingId(null);
     }
@@ -97,23 +100,23 @@ export function CancelLookup() {
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>내 예약 조회</CardTitle>
+          <CardTitle>{t.cardTitle}</CardTitle>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleLookup} className="flex items-end gap-2">
             <div className="flex-1 space-y-2">
-              <Label htmlFor="lookup-phone">전화번호</Label>
+              <Label htmlFor="lookup-phone">{t.phone}</Label>
               <Input
                 id="lookup-phone"
                 type="tel"
-                placeholder="010-1234-5678"
+                placeholder={t.phonePlaceholder}
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
                 required
               />
             </div>
             <Button type="submit" disabled={lookupLoading}>
-              {lookupLoading ? "조회 중..." : "조회"}
+              {lookupLoading ? t.searching : t.search}
             </Button>
           </form>
           {lookupError && (
@@ -127,15 +130,15 @@ export function CancelLookup() {
       {bookings && (
         <Card>
           <CardHeader>
-            <CardTitle>조회 결과 ({bookings.length})</CardTitle>
+            <CardTitle>{t.resultTitle(bookings.length)}</CardTitle>
           </CardHeader>
           <CardContent>
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>날짜</TableHead>
-                  <TableHead>이름</TableHead>
-                  <TableHead>상태</TableHead>
+                  <TableHead>{t.date}</TableHead>
+                  <TableHead>{t.name}</TableHead>
+                  <TableHead>{t.status}</TableHead>
                   <TableHead></TableHead>
                 </TableRow>
               </TableHeader>
@@ -143,7 +146,7 @@ export function CancelLookup() {
                 {bookings.length === 0 && (
                   <TableRow>
                     <TableCell colSpan={4} className="py-6 text-center text-muted-foreground">
-                      이 전화번호로 등록된 예약이 없습니다.
+                      {t.empty}
                     </TableCell>
                   </TableRow>
                 )}
@@ -157,7 +160,7 @@ export function CancelLookup() {
                     <TableCell>{b.name}</TableCell>
                     <TableCell>
                       <Badge variant={b.status === "CONFIRMED" ? "default" : "secondary"}>
-                        {STATUS_LABEL[b.status]}
+                        {t.statusLabel[b.status]}
                       </Badge>
                     </TableCell>
                     <TableCell>
@@ -169,7 +172,7 @@ export function CancelLookup() {
                             disabled={cancellingId === b.id}
                             onClick={() => handleCancel(b.id)}
                           >
-                            {cancellingId === b.id ? "취소 중..." : "취소"}
+                            {cancellingId === b.id ? t.cancelling : t.cancel}
                           </Button>
                           {rowError[b.id] && (
                             <p role="alert" aria-live="assertive" className="text-xs text-destructive">

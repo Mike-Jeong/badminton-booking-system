@@ -258,27 +258,35 @@ export async function updateBookingDay(id: string, input: BookingDayUpdateInput)
   });
 }
 
+/**
+ * 예약일 삭제(decisions.md D-17). 확정/대기(CONFIRMED/WAITING) 중인 예약이 하나라도 있으면
+ * 막고, 관리자가 먼저 취소 처리하도록 안내한다. CANCELLED 이력만 있는 경우(또는 예약이
+ * 전혀 없는 경우)는 삭제를 허용하며, 그 CANCELLED 기록도 예약일과 함께 정리한다 —
+ * 예약이 하나도 활성 상태가 아닌 예약일을 영구히 지울 수 없게 되는 것을 막기 위함이다.
+ */
 export async function deleteBookingDay(id: string) {
-  const existing = await prisma.bookingDay.findUnique({
-    where: { id },
-    include: { _count: { select: { bookings: true } } },
+  return prisma.$transaction(async (tx) => {
+    const existing = await tx.bookingDay.findUnique({ where: { id } });
+    if (!existing) {
+      throw new NotFoundError("예약일을 찾을 수 없습니다.");
+    }
+
+    const activeCount = await tx.booking.count({
+      where: { bookingDayId: id, status: { in: ["CONFIRMED", "WAITING"] } },
+    });
+    if (activeCount > 0) {
+      throw new ConflictError(
+        `이 예약일에는 확정/대기 중인 예약이 ${activeCount}건 있어 삭제할 수 없습니다. 예약을 먼저 취소 처리한 뒤 다시 시도해주세요.`
+      );
+    }
+
+    const { count: deletedBookingCount } = await tx.booking.deleteMany({
+      where: { bookingDayId: id },
+    });
+    await tx.bookingDay.delete({ where: { id } });
+
+    return { id, deletedBookingCount };
   });
-  if (!existing) {
-    throw new NotFoundError("예약일을 찾을 수 없습니다.");
-  }
-
-  // 예약 데이터는 하드 삭제하지 않는다(requirements.md 14번 확정사항). 연결된 예약이
-  // 하나라도 있으면 BookingDay를 통째로 지우는 것을 막고, 관리자가 먼저 예약을
-  // 처리(취소 등)하도록 안내한다. 예약이 전혀 없는 빈 예약일만 바로 삭제 가능하다.
-  if (existing._count.bookings > 0) {
-    throw new ConflictError(
-      `이 예약일에는 ${existing._count.bookings}건의 예약 기록이 있어 삭제할 수 없습니다. 예약을 먼저 취소 처리한 뒤 다시 시도해주세요.`
-    );
-  }
-
-  await prisma.bookingDay.delete({ where: { id } });
-
-  return { id, deletedBookingCount: 0 };
 }
 
 export async function listBookingDays(filter: ListBookingDaysFilter = {}) {
