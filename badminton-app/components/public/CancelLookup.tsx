@@ -109,7 +109,6 @@ export function CancelLookup() {
               <Input
                 id="lookup-phone"
                 type="tel"
-                placeholder={t.phonePlaceholder}
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
                 required

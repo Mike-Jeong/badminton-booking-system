@@ -62,7 +62,6 @@ export function BookingForm({ bookingDayId }: { bookingDayId: string }) {
             <Input
               id="booking-phone"
               type="tel"
-              placeholder={t.phonePlaceholder}
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
               required
