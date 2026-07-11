@@ -23,12 +23,31 @@ export interface MonthlyMemberRow {
   id: string;
   annualMemberId: string;
   annualMemberName: string;
+  annualMemberPhone: string;
   annualMemberActive: boolean;
   year: number;
   month: number;
   dayOfWeek: number;
   isActive: boolean;
   memo: string | null;
+}
+
+/**
+ * 같은 연 멤버가 여러 요일에 등록되어 있으면 목록에서 이름/전화번호가 요일 수만큼
+ * 반복 표시되던 문제(관리자 피드백)를 해결하기 위해 연 멤버 단위로 행을 묶는다.
+ * 서버가 이미 dayOfWeek asc로 정렬해 반환하므로, 그룹 내부 순서는 그대로 요일 오름차순이 유지된다.
+ */
+function groupByAnnualMember(rows: MonthlyMemberRow[]): MonthlyMemberRow[][] {
+  const order: string[] = [];
+  const groups = new Map<string, MonthlyMemberRow[]>();
+  for (const row of rows) {
+    if (!groups.has(row.annualMemberId)) {
+      groups.set(row.annualMemberId, []);
+      order.push(row.annualMemberId);
+    }
+    groups.get(row.annualMemberId)!.push(row);
+  }
+  return order.map((id) => groups.get(id)!);
 }
 
 export interface AnnualMemberOption {
@@ -322,6 +341,7 @@ export function MonthlyMembersPanel({
             <TableHeader>
               <TableRow>
                 <TableHead>연 멤버</TableHead>
+                <TableHead>전화번호</TableHead>
                 <TableHead>연/월</TableHead>
                 <TableHead>요일</TableHead>
                 <TableHead>메모</TableHead>
@@ -332,50 +352,59 @@ export function MonthlyMembersPanel({
             <TableBody>
               {monthlyMembers.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} className="py-6 text-center text-muted-foreground">
+                  <TableCell colSpan={7} className="py-6 text-center text-muted-foreground">
                     해당 연/월에 등록된 월 멤버가 없습니다.
                   </TableCell>
                 </TableRow>
               )}
-              {monthlyMembers.map((mm) => (
-                <TableRow key={mm.id}>
-                  <TableCell>
-                    {mm.annualMemberName}
-                    {!mm.annualMemberActive && (
-                      <Badge variant="secondary" className="ml-2">
-                        연 멤버 비활성
-                      </Badge>
+              {groupByAnnualMember(monthlyMembers).map((group, groupIdx) =>
+                group.map((mm, rowIdx) => (
+                  <TableRow key={mm.id} className={groupIdx > 0 && rowIdx === 0 ? "border-t-2" : undefined}>
+                    {rowIdx === 0 && (
+                      <>
+                        <TableCell rowSpan={group.length} className="align-top">
+                          {mm.annualMemberName}
+                          {!mm.annualMemberActive && (
+                            <Badge variant="secondary" className="ml-2">
+                              연 멤버 비활성
+                            </Badge>
+                          )}
+                        </TableCell>
+                        <TableCell rowSpan={group.length} className="align-top">
+                          {mm.annualMemberPhone}
+                        </TableCell>
+                      </>
                     )}
-                  </TableCell>
-                  <TableCell>
-                    {mm.year}년 {mm.month}월
-                  </TableCell>
-                  <TableCell>{DAY_LABELS[mm.dayOfWeek]}요일</TableCell>
-                  <TableCell>{mm.memo ?? "-"}</TableCell>
-                  <TableCell>
-                    <Badge variant={mm.isActive ? "default" : "secondary"}>
-                      {mm.isActive ? "활성" : "비활성"}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex flex-col items-start gap-1">
-                      <Button
-                        size="sm"
-                        variant={mm.isActive ? "destructive" : "secondary"}
-                        disabled={rowLoadingId === mm.id}
-                        onClick={() => handleToggleActive(mm)}
-                      >
-                        {mm.isActive ? "비활성화" : "활성화"}
-                      </Button>
-                      {rowError[mm.id] && (
-                        <p role="alert" aria-live="assertive" className="text-xs text-destructive">
-                          {rowError[mm.id]}
-                        </p>
-                      )}
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
+                    <TableCell>
+                      {mm.year}년 {mm.month}월
+                    </TableCell>
+                    <TableCell>{DAY_LABELS[mm.dayOfWeek]}요일</TableCell>
+                    <TableCell>{mm.memo ?? "-"}</TableCell>
+                    <TableCell>
+                      <Badge variant={mm.isActive ? "default" : "secondary"}>
+                        {mm.isActive ? "활성" : "비활성"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex flex-col items-start gap-1">
+                        <Button
+                          size="sm"
+                          variant={mm.isActive ? "destructive" : "secondary"}
+                          disabled={rowLoadingId === mm.id}
+                          onClick={() => handleToggleActive(mm)}
+                        >
+                          {mm.isActive ? "비활성화" : "활성화"}
+                        </Button>
+                        {rowError[mm.id] && (
+                          <p role="alert" aria-live="assertive" className="text-xs text-destructive">
+                            {rowError[mm.id]}
+                          </p>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
             </TableBody>
           </Table>
         </CardContent>

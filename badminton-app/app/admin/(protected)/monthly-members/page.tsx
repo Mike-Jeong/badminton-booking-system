@@ -35,6 +35,7 @@ export default async function AdminMonthlyMembersPage({
           id: m.id,
           annualMemberId: m.annualMemberId,
           annualMemberName: m.annualMember.name,
+          annualMemberPhone: m.annualMember.phone,
           annualMemberActive: m.annualMember.isActive,
           year: m.year,
           month: m.month,

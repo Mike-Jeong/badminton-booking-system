@@ -9,6 +9,7 @@ import { prisma } from "@/lib/db/prisma";
 import { ValidationError, NotFoundError, ConflictError } from "@/lib/errors";
 import { hasCapacity } from "@/lib/services/bookingService";
 import { formatDateOnlyInTimeZone } from "@/lib/timezone";
+import { decryptPhone } from "@/lib/security/phoneCrypto";
 import type { PrismaClientOrTx } from "@/lib/services/annualMemberService";
 
 export interface MonthlyMemberInput {
@@ -110,14 +111,27 @@ export async function deactivateMonthlyMember(id: string) {
   return prisma.monthlyMember.update({ where: { id }, data: { isActive: false } });
 }
 
-/** 관리자용 월 멤버 목록. 연/월 단위로 필터링하며 연결된 연 멤버 이름/활성여부를 함께 반환한다. */
+/**
+ * 관리자용 월 멤버 목록. 연/월 단위로 필터링하며 연결된 연 멤버 이름/전화번호/활성여부를
+ * 함께 반환한다. phoneEncrypted는 이 함수 안에서만 복호화해 사용하고 반환값에는 포함하지 않는다.
+ */
 export async function listMonthlyMembers(filter: ListMonthlyMembersFilter = {}) {
   const monthlyMembers = await prisma.monthlyMember.findMany({
     where: { year: filter.year, month: filter.month },
-    include: { annualMember: { select: { id: true, name: true, isActive: true } } },
+    include: {
+      annualMember: { select: { id: true, name: true, isActive: true, phoneEncrypted: true } },
+    },
     orderBy: [{ year: "desc" }, { month: "desc" }, { dayOfWeek: "asc" }, { createdAt: "asc" }],
   });
-  return monthlyMembers;
+  return monthlyMembers.map((mm) => ({
+    ...mm,
+    annualMember: {
+      id: mm.annualMember.id,
+      name: mm.annualMember.name,
+      isActive: mm.annualMember.isActive,
+      phone: decryptPhone(mm.annualMember.phoneEncrypted),
+    },
+  }));
 }
 
 /**
