@@ -1,0 +1,114 @@
+// prisma/schema.prisma
+// DB는 Turso(libSQL)를 사용하지만, libSQL은 SQLite 호환이므로 Prisma의 sqlite 커넥터를 그대로 사용한다.
+// 실제 연결은 datasource의 url이 아니라 PrismaClient 생성 시 드라이버 어댑터(@prisma/adapter-libsql)로 이루어진다(deployment.md 참고).
+
+datasource db {
+  provider = "sqlite"
+  url      = env("TURSO_DATABASE_URL") // prisma migrate diff 등 CLI 작업 시 참조용. 런타임 연결은 어댑터가 담당.
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum MemberType {
+  ANNUAL
+  CASUAL
+}
+
+enum BookingStatus {
+  WAITING
+  CONFIRMED
+  CANCELLED
+}
+
+enum BookingSource {
+  USER
+  ADMIN
+  MONTHLY_MEMBER_AUTO
+}
+
+enum SlotMode {
+  SEPARATED
+  COMBINED
+}
+
+model AnnualMember {
+  id              String   @id @default(cuid())
+  name            String
+  normalizedName  String
+  phoneHash       String   // HMAC-SHA256(normalizedPhone, PII_SECRET_KEY 파생 키) — 조회/중복확인용, 평문 아님
+  phoneEncrypted  String   // AES-256-GCM(normalizedPhone) — 관리자 열람 시에만 복호화
+  isActive        Boolean  @default(true)
+  memo            String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  monthlyMembers MonthlyMember[]
+  bookings       Booking[] @relation("MatchedAnnualMember")
+
+  @@unique([normalizedName, phoneHash])
+}
+
+model MonthlyMember {
+  id             String   @id @default(cuid())
+  annualMemberId String
+  annualMember   AnnualMember @relation(fields: [annualMemberId], references: [id])
+  year           Int
+  month          Int
+  dayOfWeek      Int       // 0(일)~6(토), JS Date.getDay() 규칙과 동일하게 서버가 관리
+  isActive       Boolean   @default(true)
+  memo           String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([annualMemberId, year, month, dayOfWeek])
+  @@index([year, month, dayOfWeek])
+}
+
+model BookingDay {
+  id          String   @id @default(cuid())
+  date        DateTime // 자정 00:00 Pacific/Auckland 기준으로 정규화해 저장
+  dayOfWeek   Int      // 서버 계산, 입력 불가
+  label       String?
+  startTime   String   // "HH:mm", Pacific/Auckland 벽시계 표시값(날짜 계산에 관여하지 않음)
+  endTime     String   // "HH:mm", startTime보다 늦어야 함
+  location    String
+  dutyPerson  String
+  totalSlots  Int
+  annualSlots Int      @default(0)
+  casualSlots Int      @default(0)
+  slotMode    SlotMode
+  isOpen      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  bookings    Booking[]
+
+  // date에 unique 제약 없음 (다중 세션 허용, 확정사항)
+  @@index([date])
+}
+
+model Booking {
+  id                    String   @id @default(cuid())
+  bookingDayId          String
+  bookingDay            BookingDay @relation(fields: [bookingDayId], references: [id])
+  name                  String
+  normalizedName        String
+  phoneHash             String   // HMAC-SHA256(normalizedPhone) — 조회/중복확인/취소검증용, 평문 아님
+  phoneEncrypted        String   // AES-256-GCM(normalizedPhone) — 관리자 열람 시에만 복호화
+  memberType            MemberType
+  matchedAnnualMemberId String?
+  matchedAnnualMember   AnnualMember? @relation("MatchedAnnualMember", fields: [matchedAnnualMemberId], references: [id])
+  status                BookingStatus
+  source                BookingSource
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  cancelledAt           DateTime?
+
+  // 중복/재예약 판정(18번)은 status에 따라 조건부이므로 DB unique 제약으로는 표현하지 않고
+  // 서비스 로직(트랜잭션 내 조회)으로 강제한다. 아래 인덱스는 조회 성능용.
+  @@index([bookingDayId, normalizedName, phoneHash])
+  @@index([phoneHash])
+  @@index([bookingDayId, status])
+}

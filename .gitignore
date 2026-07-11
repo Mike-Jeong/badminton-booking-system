@@ -1,0 +1,4 @@
+# Claude Code 로컬 설정(개인 머신 경로 등 포함, 공유 불필요)
+.claude/
+
+.DS_Store
