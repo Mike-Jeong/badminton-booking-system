@@ -84,12 +84,9 @@ export function MonthlyMembersPanel({
   const [rowLoadingId, setRowLoadingId] = useState<string | null>(null);
   const [rowError, setRowError] = useState<Record<string, string>>({});
 
-  const [applyDayOfWeek, setApplyDayOfWeek] = useState<string>("");
-  const [applyLoading, setApplyLoading] = useState(false);
-  const [applyResult, setApplyResult] = useState<{ createdCount: number; skippedCount: number } | null>(
-    null
-  );
-  const [applyError, setApplyError] = useState<string | null>(null);
+  const [dayOfWeekFilter, setDayOfWeekFilter] = useState<string>("");
+  const filteredMembers =
+    dayOfWeekFilter === "" ? monthlyMembers : monthlyMembers.filter((mm) => mm.dayOfWeek === Number(dayOfWeekFilter));
 
   function handleFilterSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -147,34 +144,6 @@ export function MonthlyMembersPanel({
       setRowError((prev) => ({ ...prev, [member.id]: "네트워크 오류가 발생했습니다." }));
     } finally {
       setRowLoadingId(null);
-    }
-  }
-
-  async function handleApply() {
-    setApplyLoading(true);
-    setApplyError(null);
-    setApplyResult(null);
-    try {
-      const res = await fetch("/api/admin/monthly-members/apply", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          year,
-          month,
-          dayOfWeek: applyDayOfWeek === "" ? undefined : Number(applyDayOfWeek),
-        }),
-      });
-      const json = await res.json();
-      if (!res.ok) {
-        setApplyError(json?.error?.message ?? "자동 배정에 실패했습니다.");
-        return;
-      }
-      setApplyResult(json.data);
-      router.refresh();
-    } catch {
-      setApplyError("네트워크 오류가 발생했습니다.");
-    } finally {
-      setApplyLoading(false);
     }
   }
 
@@ -302,17 +271,17 @@ export function MonthlyMembersPanel({
       <Card>
         <CardHeader>
           <CardTitle>
-            {year}년 {month}월 월 멤버 ({monthlyMembers.length})
+            {year}년 {month}월 월 멤버 ({filteredMembers.length})
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex flex-wrap items-end gap-2 rounded-md border p-3">
             <div className="space-y-1">
-              <Label htmlFor="apply-dayOfWeek">요일(선택, 비우면 전체 요일)</Label>
+              <Label htmlFor="dayOfWeek-filter">요일(선택, 비우면 전체 요일)</Label>
               <Select
-                id="apply-dayOfWeek"
-                value={applyDayOfWeek}
-                onChange={(e) => setApplyDayOfWeek(e.target.value)}
+                id="dayOfWeek-filter"
+                value={dayOfWeekFilter}
+                onChange={(e) => setDayOfWeekFilter(e.target.value)}
               >
                 <option value="">전체 요일</option>
                 {DAY_LABELS.map((label, idx) => (
@@ -322,19 +291,6 @@ export function MonthlyMembersPanel({
                 ))}
               </Select>
             </div>
-            <Button type="button" variant="outline" disabled={applyLoading} onClick={handleApply}>
-              {applyLoading ? "실행 중..." : `${year}년 ${month}월 예약일에 일괄 자동 배정 실행`}
-            </Button>
-            {applyResult && (
-              <p aria-live="polite" className="text-sm text-muted-foreground">
-                생성 {applyResult.createdCount}건 · 스킵 {applyResult.skippedCount}건
-              </p>
-            )}
-            {applyError && (
-              <p role="alert" aria-live="assertive" className="text-sm text-destructive">
-                {applyError}
-              </p>
-            )}
           </div>
 
           <Table>
@@ -350,14 +306,16 @@ export function MonthlyMembersPanel({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {monthlyMembers.length === 0 && (
+              {filteredMembers.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={7} className="py-6 text-center text-muted-foreground">
-                    해당 연/월에 등록된 월 멤버가 없습니다.
+                    {monthlyMembers.length === 0
+                      ? "해당 연/월에 등록된 월 멤버가 없습니다."
+                      : "해당 요일에 등록된 월 멤버가 없습니다."}
                   </TableCell>
                 </TableRow>
               )}
-              {groupByAnnualMember(monthlyMembers).map((group, groupIdx) =>
+              {groupByAnnualMember(filteredMembers).map((group, groupIdx) =>
                 group.map((mm, rowIdx) => (
                   <TableRow key={mm.id} className={groupIdx > 0 && rowIdx === 0 ? "border-t-2" : undefined}>
                     {rowIdx === 0 && (

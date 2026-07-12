@@ -1,7 +1,7 @@
 /**
  * MonthlyMemberService (architecture.md 2장, requirements.md 5·6·19번)
  * - createMonthlyMember / updateMonthlyMember / deactivateMonthlyMember / listMonthlyMembers
- * - applyMonthlyMembersToBookingDay / applyMonthlyMembersToMonth
+ * - applyMonthlyMembersToBookingDay
  * - 하드 삭제 없음(decisions.md D-07). "삭제" 액션은 deactivateMonthlyMember(isActive=false)로 처리.
  */
 
@@ -214,41 +214,4 @@ export async function applyMonthlyMembersToBookingDay(
     return applyMonthlyMembersToBookingDayCore(tx, bookingDayId);
   }
   return prisma.$transaction((trx) => applyMonthlyMembersToBookingDayCore(trx, bookingDayId));
-}
-
-/**
- * 특정 연/월(옵션 요일)의 모든 예약일에 대해 자동 배정을 실행한다.
- * 예약일별로 트랜잭션을 분리해, 한 예약일 처리 실패가 다른 예약일에 영향을 주지 않는다(architecture.md 7장).
- */
-export async function applyMonthlyMembersToMonth(
-  year: number,
-  month: number,
-  dayOfWeek?: number
-): Promise<ApplyResult> {
-  if (!Number.isInteger(year) || year < 2000) {
-    throw new ValidationError("year 값이 올바르지 않습니다.");
-  }
-  if (!isValidMonth(month)) {
-    throw new ValidationError("month는 1~12 사이여야 합니다.");
-  }
-  if (dayOfWeek !== undefined && !isValidDayOfWeek(dayOfWeek)) {
-    throw new ValidationError("dayOfWeek는 0(일)~6(토) 사이여야 합니다.");
-  }
-
-  const allBookingDays = await prisma.bookingDay.findMany({
-    select: { id: true, date: true, dayOfWeek: true },
-  });
-  const targets = allBookingDays.filter((bd) => {
-    const [bdYear, bdMonth] = formatDateOnlyInTimeZone(bd.date).split("-").map(Number);
-    return bdYear === year && bdMonth === month && (dayOfWeek === undefined || bd.dayOfWeek === dayOfWeek);
-  });
-
-  let createdCount = 0;
-  let skippedCount = 0;
-  for (const bookingDay of targets) {
-    const result = await applyMonthlyMembersToBookingDay(bookingDay.id);
-    createdCount += result.createdCount;
-    skippedCount += result.skippedCount;
-  }
-  return { createdCount, skippedCount };
 }

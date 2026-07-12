@@ -119,7 +119,8 @@ annualMemberId + year + month + dayOfWeek
 **자동 배정 실행 시점**
 - 관리자가 예약일을 새로 생성할 때, 화면에서 "월 멤버를 자동으로 추가하시겠습니까?" 확인을 거쳐 관리자가 승인한 경우 (decisions.md D-19 — 같은 요일에 세션이 여러 개 열려도 월 멤버가 모든 세션에 중복 배정되지 않도록, 무조건 실행 대신 관리자 확인을 거친다. 확인을 취소하면 이 예약일은 자동 배정을 건너뛰고, 필요시 아래 수동 버튼으로 나중에 실행할 수 있다.)
 - 관리자가 예약일 상세 페이지에서 "월 멤버 자동 배정" 버튼을 누를 때
-- 관리자가 월 멤버 관리 페이지에서 "해당 월 예약일에 자동 배정" 버튼을 누를 때
+
+(과거에는 월 멤버 관리 페이지에 특정 연/월 전체 예약일에 소급 일괄 배정하는 버튼이 있었으나, 위 두 시점만으로 충분히 커버되어 제거했다. 해당 화면의 요일 선택 UI는 이제 목록 필터 용도로만 쓰인다 — decisions.md D-20.)
 
 **중복 예약 방지 (자동 배정 한정)**
 - 같은 예약일에 동일한 이름 + 전화번호 조합의 예약이 이미 있으면 새로 만들지 않는다.
@@ -409,15 +410,6 @@ applyMonthlyMembersToBookingDay(bookingDayId)
 - 예약 자동 생성 (source = `MONTHLY_MEMBER_AUTO`)
 - 슬롯이 있으면 `CONFIRMED`, 없으면 `WAITING`
 - 결과로 생성 수, 스킵 수 반환
-
-### applyMonthlyMembersToMonth
-```ts
-applyMonthlyMembersToMonth(year, month, dayOfWeek?)
-```
-- 특정 연도/월의 예약일 목록 조회
-- `dayOfWeek`가 있으면 해당 요일만 처리
-- 각 예약일에 `applyMonthlyMembersToBookingDay()` 실행
-- 전체 생성 수, 스킵 수 반환
 
 ## 20. 동시성 처리
 

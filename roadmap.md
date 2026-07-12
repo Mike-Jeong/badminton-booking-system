@@ -83,7 +83,7 @@
 **포함 기능**
 - `AnnualMemberService`: 연 멤버 등록/수정/비활성화(하드 삭제 없음), `normalizedName+normalizedPhone` 유니크 검증
 - `MonthlyMemberService`: 월 멤버 등록/수정/비활성화(하드 삭제 없음), `annualMemberId+year+month+dayOfWeek` 유니크 검증
-- `applyMonthlyMembersToBookingDay` / `applyMonthlyMembersToMonth`: 예약일 생성 시 자동 트리거, 예약일 상세 화면의 수동 실행 버튼, 월 멤버 관리 화면의 일괄 실행 버튼
+- `applyMonthlyMembersToBookingDay`: 예약일 생성 시 관리자 확인 후 자동 트리거(decisions.md D-19), 예약일 상세 화면의 수동 실행 버튼. (월 멤버 관리 화면의 소급 일괄 실행 버튼은 이후 decisions.md D-20으로 제거되었다.)
 - 자동 배정 결과(생성 건수/스킵 건수) 안내 UI
 - 연 멤버/월 멤버 관리 화면
 

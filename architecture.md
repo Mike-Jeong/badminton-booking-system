@@ -124,7 +124,6 @@ prisma/
 - `createMonthlyMember(input)` / `updateMonthlyMember(id, input)` / `deactivateMonthlyMember(id)`
 - `listMonthlyMembers(filter)` — 연/월 단위 필터
 - `applyMonthlyMembersToBookingDay(bookingDayId)`
-- `applyMonthlyMembersToMonth(year, month, dayOfWeek?)`
 - 하드 삭제 없음(확정, decisions.md D-07). 관리자 화면의 "삭제" 액션은 `deactivateMonthlyMember`를 호출해 `isActive=false`로만 처리한다. 특정 멤버를 특정 요일 자동 배정에서 영구 제외하고 싶을 때도 이 비활성화로 처리한다(D-08).
 
 ### DashboardService (`lib/services/dashboardService.ts`)
@@ -350,7 +349,7 @@ model Booking {
 | 예약 취소 | `BookingService.cancelBooking` | 상태 조회/검증 + status 업데이트 + (CONFIRMED였다면) `promoteWaitingBookings` 호출까지 하나의 트랜잭션 |
 | 관리자 승인 | `BookingService.adminChangeBookingStatus` | 슬롯 여유 재확인 + status 업데이트 |
 | 슬롯 변경 | `BookingDayService.updateBookingDay` | BookingDay 업데이트 + (증가 시) `promoteWaitingBookings` 호출까지 하나의 트랜잭션. 감소 시에는 업데이트만 수행(강제 하향 없음) |
-| 월 멤버 자동 배정 | `MonthlyMemberService.applyMonthlyMembersToBookingDay` | 대상 월 멤버 조회 + 중복 예약 확인 + 예약 insert(들)를 BookingDay 단위로 하나의 트랜잭션. `applyMonthlyMembersToMonth`는 대상 BookingDay를 순회하며 **BookingDay별로 트랜잭션을 분리**한다(락 시간을 짧게 유지하고, 한 예약일 처리 실패가 다른 예약일에 영향을 주지 않도록 하기 위함) |
+| 월 멤버 자동 배정 | `MonthlyMemberService.applyMonthlyMembersToBookingDay` | 대상 월 멤버 조회 + 중복 예약 확인 + 예약 insert(들)를 BookingDay 단위로 하나의 트랜잭션 |
 | 대기자 자동 승격 | `BookingService.promoteWaitingBookings` | 남은 슬롯 계산 + 대상 대기자 목록(FIFO 정렬) 조회 + 순차 status 업데이트. 단독 호출 시에도 자체 트랜잭션으로 감싸고, 위 취소/슬롯변경 흐름에서 호출될 때는 상위 트랜잭션에 참여(같은 `tx` 인스턴스 전달) |
 
 공통 원칙
