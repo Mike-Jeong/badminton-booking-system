@@ -1,8 +1,12 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { formatDateOnlyInTimeZone, getDayOfWeekLabel, isBookingDayEnded } from "@/lib/timezone";
 import { useLocale } from "@/lib/i18n/LanguageContext";
 import { dictionary, formatSlotSummary } from "@/lib/i18n/dictionary";
@@ -25,6 +29,13 @@ interface BookingDayListItem {
 export function BookingDayListView({ bookingDays }: { bookingDays: BookingDayListItem[] }) {
   const { locale } = useLocale();
   const t = dictionary[locale].list;
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+
+  const filteredBookingDays = bookingDays.filter((bd) => {
+    const dateOnly = formatDateOnlyInTimeZone(new Date(bd.date));
+    return (!fromDate || dateOnly >= fromDate) && (!toDate || dateOnly <= toDate);
+  });
 
   return (
     <div className="space-y-6">
@@ -33,10 +44,50 @@ export function BookingDayListView({ bookingDays }: { bookingDays: BookingDayLis
         <p className="text-sm text-muted-foreground">{t.subheading}</p>
       </div>
 
+      {bookingDays.length > 0 && (
+        <div className="flex flex-wrap items-end gap-2 rounded-md border p-3">
+          <div className="space-y-1">
+            <Label htmlFor="list-filter-from">{t.filterFrom}</Label>
+            <Input
+              id="list-filter-from"
+              type="date"
+              value={fromDate}
+              onChange={(e) => setFromDate(e.target.value)}
+              className="w-40"
+            />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="list-filter-to">{t.filterTo}</Label>
+            <Input
+              id="list-filter-to"
+              type="date"
+              value={toDate}
+              onChange={(e) => setToDate(e.target.value)}
+              className="w-40"
+            />
+          </div>
+          {(fromDate || toDate) && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setFromDate("");
+                setToDate("");
+              }}
+            >
+              {t.filterReset}
+            </Button>
+          )}
+        </div>
+      )}
+
       {bookingDays.length === 0 && <p className="text-muted-foreground">{t.empty}</p>}
+      {bookingDays.length > 0 && filteredBookingDays.length === 0 && (
+        <p className="text-muted-foreground">{t.emptyFiltered}</p>
+      )}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {bookingDays.map((bd) => (
+        {filteredBookingDays.map((bd) => (
           <Link key={bd.id} href={`/booking-days/${bd.id}`}>
             <Card className="h-full transition-colors hover:bg-accent">
               <CardHeader>

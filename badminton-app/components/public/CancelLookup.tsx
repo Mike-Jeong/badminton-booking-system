@@ -40,10 +40,20 @@ export function CancelLookup() {
   const [lookupLoading, setLookupLoading] = useState(false);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [rowError, setRowError] = useState<Record<string, string>>({});
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+
+  const filteredBookings =
+    bookings?.filter((b) => {
+      const dateOnly = formatDateOnlyInTimeZone(new Date(b.bookingDay.date));
+      return (!fromDate || dateOnly >= fromDate) && (!toDate || dateOnly <= toDate);
+    }) ?? null;
 
   async function handleLookup(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setLookupError(null);
+    setFromDate("");
+    setToDate("");
     setLookupLoading(true);
     try {
       const res = await fetch("/api/bookings/lookup", {
@@ -129,9 +139,45 @@ export function CancelLookup() {
       {bookings && (
         <Card>
           <CardHeader>
-            <CardTitle>{t.resultTitle(bookings.length)}</CardTitle>
+            <CardTitle>{t.resultTitle(filteredBookings?.length ?? 0)}</CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-4">
+            {bookings.length > 0 && (
+              <div className="flex flex-wrap items-end gap-2 rounded-md border p-3">
+                <div className="space-y-1">
+                  <Label htmlFor="cancel-filter-from">{t.filterFrom}</Label>
+                  <Input
+                    id="cancel-filter-from"
+                    type="date"
+                    value={fromDate}
+                    onChange={(e) => setFromDate(e.target.value)}
+                    className="w-40"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="cancel-filter-to">{t.filterTo}</Label>
+                  <Input
+                    id="cancel-filter-to"
+                    type="date"
+                    value={toDate}
+                    onChange={(e) => setToDate(e.target.value)}
+                    className="w-40"
+                  />
+                </div>
+                {(fromDate || toDate) && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      setFromDate("");
+                      setToDate("");
+                    }}
+                  >
+                    {t.filterReset}
+                  </Button>
+                )}
+              </div>
+            )}
             <Table>
               <TableHeader>
                 <TableRow>
@@ -149,7 +195,14 @@ export function CancelLookup() {
                     </TableCell>
                   </TableRow>
                 )}
-                {bookings.map((b) => (
+                {bookings.length > 0 && filteredBookings?.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={4} className="py-6 text-center text-muted-foreground">
+                      {t.emptyFiltered}
+                    </TableCell>
+                  </TableRow>
+                )}
+                {filteredBookings?.map((b) => (
                   <TableRow key={b.id}>
                     <TableCell>
                       {formatDateOnlyInTimeZone(new Date(b.bookingDay.date))}
