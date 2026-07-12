@@ -14,7 +14,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { formatDateOnlyInTimeZone, isBookingDayEnded } from "@/lib/timezone";
+import {
+  addDaysToDateOnly,
+  formatDateOnlyInTimeZone,
+  getTodayDateOnlyInTimeZone,
+  isBookingDayEnded,
+} from "@/lib/timezone";
 import { useLocale } from "@/lib/i18n/LanguageContext";
 import { dictionary, translateApiErrorMessage } from "@/lib/i18n/dictionary";
 
@@ -27,6 +32,8 @@ interface LookupBooking {
   bookingDay: { id: string; date: string; label: string | null; location: string; endTime: string };
 }
 
+const DEFAULT_FILTER_RANGE_DAYS = 7;
+
 /**
  * 예약 취소 2단계 플로우(requirements.md 14번, decisions.md D-03):
  * 전화번호로 목록 조회 -> bookingId 선택 -> 취소.
@@ -34,14 +41,16 @@ interface LookupBooking {
 export function CancelLookup() {
   const { locale } = useLocale();
   const t = dictionary[locale].lookup;
+  const defaultFrom = getTodayDateOnlyInTimeZone();
+  const defaultTo = addDaysToDateOnly(defaultFrom, DEFAULT_FILTER_RANGE_DAYS);
   const [phone, setPhone] = useState("");
   const [bookings, setBookings] = useState<LookupBooking[] | null>(null);
   const [lookupError, setLookupError] = useState<string | null>(null);
   const [lookupLoading, setLookupLoading] = useState(false);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [rowError, setRowError] = useState<Record<string, string>>({});
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
+  const [fromDate, setFromDate] = useState(defaultFrom);
+  const [toDate, setToDate] = useState(defaultTo);
 
   const filteredBookings =
     bookings?.filter((b) => {
@@ -52,8 +61,8 @@ export function CancelLookup() {
   async function handleLookup(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setLookupError(null);
-    setFromDate("");
-    setToDate("");
+    setFromDate(defaultFrom);
+    setToDate(defaultTo);
     setLookupLoading(true);
     try {
       const res = await fetch("/api/bookings/lookup", {
@@ -164,13 +173,13 @@ export function CancelLookup() {
                     className="w-40"
                   />
                 </div>
-                {(fromDate || toDate) && (
+                {(fromDate !== defaultFrom || toDate !== defaultTo) && (
                   <Button
                     type="button"
                     variant="outline"
                     onClick={() => {
-                      setFromDate("");
-                      setToDate("");
+                      setFromDate(defaultFrom);
+                      setToDate(defaultTo);
                     }}
                   >
                     {t.filterReset}

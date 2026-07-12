@@ -7,7 +7,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { formatDateOnlyInTimeZone, getDayOfWeekLabel, isBookingDayEnded } from "@/lib/timezone";
+import {
+  addDaysToDateOnly,
+  formatDateOnlyInTimeZone,
+  getDayOfWeekLabel,
+  getTodayDateOnlyInTimeZone,
+  isBookingDayEnded,
+} from "@/lib/timezone";
 import { useLocale } from "@/lib/i18n/LanguageContext";
 import { dictionary, formatSlotSummary } from "@/lib/i18n/dictionary";
 
@@ -26,11 +32,15 @@ interface BookingDayListItem {
   totalSlots: number;
 }
 
+const DEFAULT_FILTER_RANGE_DAYS = 7;
+
 export function BookingDayListView({ bookingDays }: { bookingDays: BookingDayListItem[] }) {
   const { locale } = useLocale();
   const t = dictionary[locale].list;
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
+  const defaultFrom = getTodayDateOnlyInTimeZone();
+  const defaultTo = addDaysToDateOnly(defaultFrom, DEFAULT_FILTER_RANGE_DAYS);
+  const [fromDate, setFromDate] = useState(defaultFrom);
+  const [toDate, setToDate] = useState(defaultTo);
 
   const filteredBookingDays = bookingDays.filter((bd) => {
     const dateOnly = formatDateOnlyInTimeZone(new Date(bd.date));
@@ -66,13 +76,13 @@ export function BookingDayListView({ bookingDays }: { bookingDays: BookingDayLis
               className="w-40"
             />
           </div>
-          {(fromDate || toDate) && (
+          {(fromDate !== defaultFrom || toDate !== defaultTo) && (
             <Button
               type="button"
               variant="outline"
               onClick={() => {
-                setFromDate("");
-                setToDate("");
+                setFromDate(defaultFrom);
+                setToDate(defaultTo);
               }}
             >
               {t.filterReset}
