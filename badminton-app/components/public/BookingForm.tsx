@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useLocale } from "@/lib/i18n/LanguageContext";
 import { dictionary, translateApiErrorMessage } from "@/lib/i18n/dictionary";
 
-export function BookingForm({ bookingDayId }: { bookingDayId: string }) {
+export function BookingForm({ bookingDayId, ended = false }: { bookingDayId: string; ended?: boolean }) {
   const router = useRouter();
   const { locale } = useLocale();
   const t = dictionary[locale].form;
@@ -44,6 +44,19 @@ export function BookingForm({ bookingDayId }: { bookingDayId: string }) {
     } finally {
       setLoading(false);
     }
+  }
+
+  if (ended) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>{t.title}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">{t.endedMessage}</p>
+        </CardContent>
+      </Card>
+    );
   }
 
   return (

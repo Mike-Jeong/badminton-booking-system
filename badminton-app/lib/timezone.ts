@@ -70,22 +70,50 @@ function isValidDateOnly(value: string): boolean {
 }
 
 /**
- * "YYYY-MM-DD" 형식의 날짜(Pacific/Auckland 기준 캘린더 날짜)를 받아,
- * 그 날짜의 Pacific/Auckland 자정(00:00)에 해당하는 UTC 시각(Date)을 반환한다.
- * DB(BookingDay.date)에 저장할 때 사용한다.
+ * "YYYY-MM-DD" 형식의 날짜(Pacific/Auckland 기준 캘린더 날짜)와 시:분을 받아,
+ * 그 날짜/시각(Pacific/Auckland 기준)에 해당하는 UTC 시각(Date)을 반환한다.
  */
-export function dateOnlyToUtcMidnight(dateOnly: string): Date {
+function dateTimeOnlyToUtc(dateOnly: string, hour: number, minute: number): Date {
   if (!isValidDateOnly(dateOnly)) {
     throw new Error(`잘못된 날짜 형식입니다: ${dateOnly} (YYYY-MM-DD 형식이어야 합니다)`);
   }
   const [year, month, day] = dateOnly.split("-").map(Number);
 
-  // 1차 추정: 이 날짜를 그대로 UTC 자정으로 가정
-  const utcGuess = new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
+  // 1차 추정: 이 날짜/시각을 그대로 UTC로 가정
+  const utcGuess = new Date(Date.UTC(year, month - 1, day, hour, minute, 0));
   const offsetMinutes = getTimeZoneOffsetMinutes(utcGuess, AUCKLAND_TIME_ZONE);
   // local(Auckland) = UTC + offset  =>  UTC = local - offset
-  // utcGuess를 "Auckland 기준 y-m-d 00:00 시점의 로컬 시각"으로 보정한다.
+  // utcGuess를 "Auckland 기준 y-m-d hh:mm 시점의 로컬 시각"으로 보정한다.
   return new Date(utcGuess.getTime() - offsetMinutes * 60_000);
+}
+
+/**
+ * "YYYY-MM-DD" 형식의 날짜(Pacific/Auckland 기준 캘린더 날짜)를 받아,
+ * 그 날짜의 Pacific/Auckland 자정(00:00)에 해당하는 UTC 시각(Date)을 반환한다.
+ * DB(BookingDay.date)에 저장할 때 사용한다.
+ */
+export function dateOnlyToUtcMidnight(dateOnly: string): Date {
+  return dateTimeOnlyToUtc(dateOnly, 0, 0);
+}
+
+/**
+ * BookingDay(date + endTime)의 종료 시각을 UTC Date로 반환한다.
+ * date는 Pacific/Auckland 기준 캘린더 날짜를 나타내는 UTC 자정 Date(BookingDay.date 컬럼 그대로),
+ * endTime은 "HH:mm" 형식이다.
+ */
+export function getBookingDayEndUtc(date: Date, endTime: string): Date {
+  const dateOnly = formatDateOnlyInTimeZone(date);
+  const [hour, minute] = endTime.split(":").map(Number);
+  return dateTimeOnlyToUtc(dateOnly, hour, minute);
+}
+
+/**
+ * 예약일의 종료 시각(date + endTime)이 이미 지났는지 여부를 Pacific/Auckland 기준
+ * "지금"과 비교해 판단한다(decisions.md D-23 — 종료된 예약일은 조회는 가능하되
+ * 신청/취소는 막는다).
+ */
+export function isBookingDayEnded(date: Date, endTime: string, now: Date = new Date()): boolean {
+  return getBookingDayEndUtc(date, endTime).getTime() <= now.getTime();
 }
 
 /**

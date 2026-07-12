@@ -14,7 +14,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { formatDateOnlyInTimeZone } from "@/lib/timezone";
+import { formatDateOnlyInTimeZone, isBookingDayEnded } from "@/lib/timezone";
 import { useLocale } from "@/lib/i18n/LanguageContext";
 import { dictionary, translateApiErrorMessage } from "@/lib/i18n/dictionary";
 
@@ -24,7 +24,7 @@ interface LookupBooking {
   status: "WAITING" | "CONFIRMED" | "CANCELLED";
   createdAt: string;
   cancelledAt: string | null;
-  bookingDay: { id: string; date: string; label: string | null; location: string };
+  bookingDay: { id: string; date: string; label: string | null; location: string; endTime: string };
 }
 
 /**
@@ -163,23 +163,26 @@ export function CancelLookup() {
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      {b.status !== "CANCELLED" && (
-                        <div className="space-y-1">
-                          <Button
-                            variant="destructive"
-                            size="sm"
-                            disabled={cancellingId === b.id}
-                            onClick={() => handleCancel(b.id)}
-                          >
-                            {cancellingId === b.id ? t.cancelling : t.cancel}
-                          </Button>
-                          {rowError[b.id] && (
-                            <p role="alert" aria-live="assertive" className="text-xs text-destructive">
-                              {rowError[b.id]}
-                            </p>
-                          )}
-                        </div>
-                      )}
+                      {b.status !== "CANCELLED" &&
+                        (isBookingDayEnded(new Date(b.bookingDay.date), b.bookingDay.endTime) ? (
+                          <p className="text-xs text-muted-foreground">{t.endedNote}</p>
+                        ) : (
+                          <div className="space-y-1">
+                            <Button
+                              variant="destructive"
+                              size="sm"
+                              disabled={cancellingId === b.id}
+                              onClick={() => handleCancel(b.id)}
+                            >
+                              {cancellingId === b.id ? t.cancelling : t.cancel}
+                            </Button>
+                            {rowError[b.id] && (
+                              <p role="alert" aria-live="assertive" className="text-xs text-destructive">
+                                {rowError[b.id]}
+                              </p>
+                            )}
+                          </div>
+                        ))}
                     </TableCell>
                   </TableRow>
                 ))}

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { formatDateOnlyInTimeZone, getDayOfWeekLabel } from "@/lib/timezone";
+import { formatDateOnlyInTimeZone, getDayOfWeekLabel, isBookingDayEnded } from "@/lib/timezone";
 import { useLocale } from "@/lib/i18n/LanguageContext";
 import { dictionary, formatSlotSummary } from "@/lib/i18n/dictionary";
 
@@ -40,11 +40,16 @@ export function BookingDayListView({ bookingDays }: { bookingDays: BookingDayLis
           <Link key={bd.id} href={`/booking-days/${bd.id}`}>
             <Card className="h-full transition-colors hover:bg-accent">
               <CardHeader>
-                <CardTitle className="flex items-center justify-between text-base">
+                <CardTitle className="flex flex-wrap items-center justify-between gap-1 text-base">
                   <span>
                     {formatDateOnlyInTimeZone(new Date(bd.date))} ({getDayOfWeekLabel(bd.dayOfWeek, locale)})
                   </span>
-                  {bd.label && <Badge variant="secondary">{bd.label}</Badge>}
+                  <span className="flex items-center gap-1">
+                    {isBookingDayEnded(new Date(bd.date), bd.endTime) && (
+                      <Badge variant="secondary">{t.ended}</Badge>
+                    )}
+                    {bd.label && <Badge variant="secondary">{bd.label}</Badge>}
+                  </span>
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-1 text-sm">

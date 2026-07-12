@@ -12,6 +12,7 @@ import { prisma } from "@/lib/db/prisma";
 import { ValidationError, NotFoundError, ConflictError } from "@/lib/errors";
 import { normalizeName, normalizePhone } from "@/lib/normalize";
 import { hashPhone, encryptPhone, decryptPhone } from "@/lib/security/phoneCrypto";
+import { isBookingDayEnded } from "@/lib/timezone";
 import { determineMemberType, type PrismaClientOrTx } from "@/lib/services/annualMemberService";
 
 export interface CreateBookingInput {
@@ -112,6 +113,9 @@ async function createBookingCore(
   if (!bookingDay || (input.source === "USER" && !bookingDay.isOpen)) {
     throw new NotFoundError("예약일을 찾을 수 없습니다.");
   }
+  if (input.source === "USER" && isBookingDayEnded(bookingDay.date, bookingDay.endTime)) {
+    throw new ConflictError("이미 종료된 예약일에는 신청할 수 없습니다.");
+  }
 
   const phoneHash = hashPhone(normalizedPhone);
 
@@ -184,7 +188,7 @@ export async function lookupBookingsByPhone(phone: string) {
       createdAt: true,
       cancelledAt: true,
       bookingDay: {
-        select: { id: true, date: true, label: true, location: true },
+        select: { id: true, date: true, label: true, location: true, endTime: true },
       },
     },
     orderBy: { createdAt: "desc" },
@@ -205,6 +209,17 @@ async function cancelBookingCore(
   }
   if (booking.status === "CANCELLED") {
     throw new ConflictError("이미 취소된 예약입니다.");
+  }
+
+  // expectedPhoneHash가 있으면 사용자 셀프 취소 경로다(관리자 취소는 종료 여부와 무관하게 허용).
+  if (expectedPhoneHash !== undefined) {
+    const bookingDay = await tx.bookingDay.findUnique({
+      where: { id: booking.bookingDayId },
+      select: { date: true, endTime: true },
+    });
+    if (bookingDay && isBookingDayEnded(bookingDay.date, bookingDay.endTime)) {
+      throw new ConflictError("이미 종료된 예약일의 예약은 취소할 수 없습니다.");
+    }
   }
 
   const wasConfirmed = booking.status === "CONFIRMED";

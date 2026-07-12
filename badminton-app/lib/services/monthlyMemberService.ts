@@ -9,7 +9,7 @@
 import { prisma } from "@/lib/db/prisma";
 import { ValidationError, NotFoundError, ConflictError } from "@/lib/errors";
 import { hasCapacity } from "@/lib/services/bookingService";
-import { formatDateOnlyInTimeZone } from "@/lib/timezone";
+import { formatDateOnlyInTimeZone, isBookingDayEnded } from "@/lib/timezone";
 import { decryptPhone } from "@/lib/security/phoneCrypto";
 import type { PrismaClientOrTx } from "@/lib/services/annualMemberService";
 
@@ -52,6 +52,8 @@ export interface CreateMonthlyMemberOptions {
    * 등록 직후 이 연/월/요일과 일치하는, 이미 생성되어 있는 예약일들에도 자동 배정을 실행할지
    * 여부(decisions.md D-22). 기본값 false — 관리자 화면은 확인 대화상자를 거쳐 명시적으로
    * true를 넘긴다. 같은 요일에 세션이 여러 개 있으면 그 예약일 모두에 배정될 수 있다.
+   * 이미 종료된(date+endTime이 지난) 예약일은 대상에서 제외한다(decisions.md D-23) — 끝난
+   * 세션에 소급으로 참석 기록을 만드는 것은 의미가 없다.
    */
   applyToExistingBookingDays?: boolean;
 }
@@ -101,11 +103,16 @@ export async function createMonthlyMember(input: MonthlyMemberInput, options: Cr
   let existingBookingDayAssignment: ApplyResult | null = null;
   if (options.applyToExistingBookingDays) {
     const allBookingDays = await prisma.bookingDay.findMany({
-      select: { id: true, date: true, dayOfWeek: true },
+      select: { id: true, date: true, dayOfWeek: true, endTime: true },
     });
     const targets = allBookingDays.filter((bd) => {
       const [bdYear, bdMonth] = formatDateOnlyInTimeZone(bd.date).split("-").map(Number);
-      return bdYear === input.year && bdMonth === input.month && bd.dayOfWeek === input.dayOfWeek;
+      return (
+        bdYear === input.year &&
+        bdMonth === input.month &&
+        bd.dayOfWeek === input.dayOfWeek &&
+        !isBookingDayEnded(bd.date, bd.endTime)
+      );
     });
 
     let createdCount = 0;

@@ -12,7 +12,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { formatDateOnlyInTimeZone, getDayOfWeekLabel } from "@/lib/timezone";
+import { formatDateOnlyInTimeZone, getDayOfWeekLabel, isBookingDayEnded } from "@/lib/timezone";
 import { useLocale } from "@/lib/i18n/LanguageContext";
 import { dictionary, formatSlotSummary, formatConfirmedWaiting } from "@/lib/i18n/dictionary";
 
@@ -44,6 +44,7 @@ export function BookingDayDetailView({ bookingDay }: { bookingDay: BookingDayDet
 
   const confirmed = bookingDay.bookings.filter((b) => b.status === "CONFIRMED");
   const waiting = bookingDay.bookings.filter((b) => b.status === "WAITING");
+  const ended = isBookingDayEnded(new Date(bookingDay.date), bookingDay.endTime);
 
   return (
     <div className="space-y-8">
@@ -51,9 +52,16 @@ export function BookingDayDetailView({ bookingDay }: { bookingDay: BookingDayDet
         <Link href="/" className="text-sm text-muted-foreground hover:underline">
           {t.back}
         </Link>
-        <h1 className="text-2xl font-bold">
-          {formatDateOnlyInTimeZone(new Date(bookingDay.date))} ({getDayOfWeekLabel(bookingDay.dayOfWeek, locale)})
-          {bookingDay.label ? ` · ${bookingDay.label}` : ""}
+        <h1 className="flex flex-wrap items-center gap-2 text-2xl font-bold">
+          <span>
+            {formatDateOnlyInTimeZone(new Date(bookingDay.date))} ({getDayOfWeekLabel(bookingDay.dayOfWeek, locale)})
+            {bookingDay.label ? ` · ${bookingDay.label}` : ""}
+          </span>
+          {ended && (
+            <Badge variant="secondary" className="text-sm font-normal">
+              {t.ended}
+            </Badge>
+          )}
         </h1>
       </div>
 
@@ -95,7 +103,7 @@ export function BookingDayDetailView({ bookingDay }: { bookingDay: BookingDayDet
         </CardContent>
       </Card>
 
-      <BookingForm bookingDayId={bookingDay.id} />
+      <BookingForm bookingDayId={bookingDay.id} ended={ended} />
 
       <Card>
         <CardHeader>

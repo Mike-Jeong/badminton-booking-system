@@ -19,6 +19,7 @@ export const dictionary = {
       location: "장소",
       duty: "듀티",
       slots: "슬롯",
+      ended: "종료됨",
     },
     detail: {
       back: "← 예약 가능한 날짜",
@@ -34,6 +35,7 @@ export const dictionary = {
       emptyRoster: "아직 예약자가 없습니다.",
       confirmed: "확정",
       waiting: "대기",
+      ended: "종료됨",
     },
     form: {
       title: "예약 신청",
@@ -45,6 +47,7 @@ export const dictionary = {
       networkError: "네트워크 오류가 발생했습니다.",
       submitting: "신청 중...",
       submit: "예약 신청",
+      endedMessage: "이 예약일은 이미 종료되어 더 이상 신청할 수 없습니다.",
     },
     lookup: {
       heading: "내 예약 조회/취소",
@@ -65,6 +68,7 @@ export const dictionary = {
       cancel: "취소",
       cancelFallbackError: "취소에 실패했습니다.",
       statusLabel: { CONFIRMED: "확정", WAITING: "대기", CANCELLED: "취소됨" },
+      endedNote: "종료된 예약일 (취소 불가)",
     },
   },
   en: {
@@ -80,6 +84,7 @@ export const dictionary = {
       location: "Location",
       duty: "Duty",
       slots: "Slots",
+      ended: "Ended",
     },
     detail: {
       back: "← Available Booking Days",
@@ -95,6 +100,7 @@ export const dictionary = {
       emptyRoster: "No one has registered yet.",
       confirmed: "Confirmed",
       waiting: "Waiting",
+      ended: "Ended",
     },
     form: {
       title: "Apply for Booking",
@@ -106,6 +112,7 @@ export const dictionary = {
       networkError: "A network error occurred.",
       submitting: "Submitting...",
       submit: "Apply",
+      endedMessage: "This session has already ended and is no longer accepting applications.",
     },
     lookup: {
       heading: "My Bookings",
@@ -126,6 +133,7 @@ export const dictionary = {
       cancel: "Cancel",
       cancelFallbackError: "Failed to cancel booking.",
       statusLabel: { CONFIRMED: "Confirmed", WAITING: "Waiting", CANCELLED: "Cancelled" },
+      endedNote: "Session ended (cannot cancel)",
     },
   },
 } as const satisfies Record<Locale, unknown>;
@@ -166,6 +174,8 @@ const KNOWN_ERROR_MESSAGES: Record<string, string> = {
   "이미 이 예약일에 신청된 예약이 있습니다.": "You have already applied for this booking day.",
   "전화번호가 일치하지 않아 취소할 수 없습니다.": "Cannot cancel — phone number does not match.",
   "이미 취소된 예약입니다.": "This booking has already been cancelled.",
+  "이미 종료된 예약일에는 신청할 수 없습니다.": "This booking day has already ended — applications are closed.",
+  "이미 종료된 예약일의 예약은 취소할 수 없습니다.": "This booking day has already ended — cancellations are closed.",
   "서버 오류가 발생했습니다.": "A server error occurred.",
 };
 
