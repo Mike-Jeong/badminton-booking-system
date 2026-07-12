@@ -3,7 +3,7 @@ import { withApiHandler, jsonOk, type RouteContext } from "@/lib/http";
 import { verifySessionFromRequest } from "@/lib/services/adminAuthService";
 import { updateMonthlyMember, deactivateMonthlyMember } from "@/lib/services/monthlyMemberService";
 
-/** 관리자(PATCH) — 월 멤버 수정(활성여부/메모만 변경 가능, 대상/연월요일은 불변). */
+/** 관리자(PATCH) — 월 멤버 수정. 연도/월/요일/활성여부/메모 모두 변경 가능하다(decisions.md D-21). 대상(연 멤버)만 불변. */
 export const PATCH = withApiHandler<{ id: string }>(
   async (req: NextRequest, context: RouteContext<{ id: string }>) => {
     await verifySessionFromRequest(req);

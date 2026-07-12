@@ -3,6 +3,7 @@
  * - createMonthlyMember / updateMonthlyMember / deactivateMonthlyMember / listMonthlyMembers
  * - applyMonthlyMembersToBookingDay
  * - 하드 삭제 없음(decisions.md D-07). "삭제" 액션은 deactivateMonthlyMember(isActive=false)로 처리.
+ * - 연도/월/요일 수정 가능(decisions.md D-21), 등록 시 기존 예약일 소급 배정 옵션(decisions.md D-22).
  */
 
 import { prisma } from "@/lib/db/prisma";
@@ -21,6 +22,9 @@ export interface MonthlyMemberInput {
 }
 
 export interface MonthlyMemberUpdateInput {
+  year?: number;
+  month?: number;
+  dayOfWeek?: number;
   isActive?: boolean;
   memo?: string | null;
 }
@@ -43,11 +47,20 @@ function isValidDayOfWeek(value: unknown): value is number {
   return Number.isInteger(value) && (value as number) >= 0 && (value as number) <= 6;
 }
 
+export interface CreateMonthlyMemberOptions {
+  /**
+   * 등록 직후 이 연/월/요일과 일치하는, 이미 생성되어 있는 예약일들에도 자동 배정을 실행할지
+   * 여부(decisions.md D-22). 기본값 false — 관리자 화면은 확인 대화상자를 거쳐 명시적으로
+   * true를 넘긴다. 같은 요일에 세션이 여러 개 있으면 그 예약일 모두에 배정될 수 있다.
+   */
+  applyToExistingBookingDays?: boolean;
+}
+
 /**
  * 월 멤버 등록(requirements.md 5번). 같은 연 멤버가 같은 월에 여러 요일로 등록될 수 있으나,
  * (annualMemberId, year, month, dayOfWeek) 조합 중복은 막는다.
  */
-export async function createMonthlyMember(input: MonthlyMemberInput) {
+export async function createMonthlyMember(input: MonthlyMemberInput, options: CreateMonthlyMemberOptions = {}) {
   if (!Number.isInteger(input.year) || input.year < 2000) {
     throw new ValidationError("year 값이 올바르지 않습니다.");
   }
@@ -75,7 +88,7 @@ export async function createMonthlyMember(input: MonthlyMemberInput) {
     throw new ConflictError("이미 같은 연도/월/요일로 등록된 월 멤버입니다.");
   }
 
-  return prisma.monthlyMember.create({
+  const created = await prisma.monthlyMember.create({
     data: {
       annualMemberId: input.annualMemberId,
       year: input.year,
@@ -84,18 +97,77 @@ export async function createMonthlyMember(input: MonthlyMemberInput) {
       memo: input.memo?.trim() || null,
     },
   });
+
+  let existingBookingDayAssignment: ApplyResult | null = null;
+  if (options.applyToExistingBookingDays) {
+    const allBookingDays = await prisma.bookingDay.findMany({
+      select: { id: true, date: true, dayOfWeek: true },
+    });
+    const targets = allBookingDays.filter((bd) => {
+      const [bdYear, bdMonth] = formatDateOnlyInTimeZone(bd.date).split("-").map(Number);
+      return bdYear === input.year && bdMonth === input.month && bd.dayOfWeek === input.dayOfWeek;
+    });
+
+    let createdCount = 0;
+    let skippedCount = 0;
+    for (const bookingDay of targets) {
+      const result = await applyMonthlyMembersToBookingDay(bookingDay.id);
+      createdCount += result.createdCount;
+      skippedCount += result.skippedCount;
+    }
+    existingBookingDayAssignment = { createdCount, skippedCount };
+  }
+
+  return { ...created, existingBookingDayAssignment };
 }
 
-/** 월 멤버 수정. 대상(연 멤버/연도/월/요일)은 등록 후 바꿀 수 없고, 활성 여부/메모만 수정한다. */
+/**
+ * 월 멤버 수정. 연도/월/요일도 변경 가능하다(decisions.md D-21). 대상(연 멤버) 자체는 바꿀 수
+ * 없고, 새 연/월/요일 조합이 다른 레코드와 중복되면 거부한다.
+ */
 export async function updateMonthlyMember(id: string, input: MonthlyMemberUpdateInput) {
   const existing = await prisma.monthlyMember.findUnique({ where: { id } });
   if (!existing) {
     throw new NotFoundError("월 멤버를 찾을 수 없습니다.");
   }
 
+  if (input.year !== undefined && (!Number.isInteger(input.year) || input.year < 2000)) {
+    throw new ValidationError("year 값이 올바르지 않습니다.");
+  }
+  if (input.month !== undefined && !isValidMonth(input.month)) {
+    throw new ValidationError("month는 1~12 사이여야 합니다.");
+  }
+  if (input.dayOfWeek !== undefined && !isValidDayOfWeek(input.dayOfWeek)) {
+    throw new ValidationError("dayOfWeek는 0(일)~6(토) 사이여야 합니다.");
+  }
+
+  const nextYear = input.year ?? existing.year;
+  const nextMonth = input.month ?? existing.month;
+  const nextDayOfWeek = input.dayOfWeek ?? existing.dayOfWeek;
+  const targetChanged =
+    nextYear !== existing.year || nextMonth !== existing.month || nextDayOfWeek !== existing.dayOfWeek;
+
+  if (targetChanged) {
+    const duplicate = await prisma.monthlyMember.findFirst({
+      where: {
+        id: { not: id },
+        annualMemberId: existing.annualMemberId,
+        year: nextYear,
+        month: nextMonth,
+        dayOfWeek: nextDayOfWeek,
+      },
+    });
+    if (duplicate) {
+      throw new ConflictError("이미 같은 연도/월/요일로 등록된 월 멤버입니다.");
+    }
+  }
+
   return prisma.monthlyMember.update({
     where: { id },
     data: {
+      year: nextYear,
+      month: nextMonth,
+      dayOfWeek: nextDayOfWeek,
       isActive: input.isActive,
       memo: input.memo !== undefined ? input.memo?.trim() || null : undefined,
     },

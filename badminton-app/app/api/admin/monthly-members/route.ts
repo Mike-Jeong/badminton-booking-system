@@ -32,12 +32,15 @@ export const POST = withApiHandler(async (req: NextRequest) => {
     throw new ValidationError("annualMemberId, year, month, dayOfWeek가 필요합니다.");
   }
 
-  const member = await createMonthlyMember({
-    annualMemberId: body.annualMemberId,
-    year: body.year,
-    month: body.month,
-    dayOfWeek: body.dayOfWeek,
-    memo: body.memo ?? null,
-  });
+  const member = await createMonthlyMember(
+    {
+      annualMemberId: body.annualMemberId,
+      year: body.year,
+      month: body.month,
+      dayOfWeek: body.dayOfWeek,
+      memo: body.memo ?? null,
+    },
+    { applyToExistingBookingDays: body.applyToExistingBookingDays ?? false }
+  );
   return jsonOk(member, 201);
 });
