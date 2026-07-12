@@ -14,12 +14,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  addDaysToDateOnly,
-  formatDateOnlyInTimeZone,
-  getTodayDateOnlyInTimeZone,
-  isBookingDayEnded,
-} from "@/lib/timezone";
+import { formatDateOnlyInTimeZone, getTodayDateOnlyInTimeZone, isBookingDayEnded } from "@/lib/timezone";
 import { useLocale } from "@/lib/i18n/LanguageContext";
 import { dictionary, translateApiErrorMessage } from "@/lib/i18n/dictionary";
 
@@ -32,17 +27,19 @@ interface LookupBooking {
   bookingDay: { id: string; date: string; label: string | null; location: string; endTime: string };
 }
 
-const DEFAULT_FILTER_RANGE_DAYS = 7;
-
 /**
  * 예약 취소 2단계 플로우(requirements.md 14번, decisions.md D-03):
  * 전화번호로 목록 조회 -> bookingId 선택 -> 취소.
+ *
+ * 날짜 필터 기본값은 "오늘 이후만"(fromDate=오늘, toDate=무제한)이다. 이 화면은 "이번 주에
+ * 뭐가 있나 훑어보기"가 아니라 "내 특정 예약을 찾아 취소하기"가 목적이라, 지난 예약만
+ * 기본으로 가려주고 미래 쪽은 아무리 멀어도 항상 보이게 한다(decisions.md D-24 개정).
  */
 export function CancelLookup() {
   const { locale } = useLocale();
   const t = dictionary[locale].lookup;
   const defaultFrom = getTodayDateOnlyInTimeZone();
-  const defaultTo = addDaysToDateOnly(defaultFrom, DEFAULT_FILTER_RANGE_DAYS);
+  const defaultTo = "";
   const [phone, setPhone] = useState("");
   const [bookings, setBookings] = useState<LookupBooking[] | null>(null);
   const [lookupError, setLookupError] = useState<string | null>(null);
