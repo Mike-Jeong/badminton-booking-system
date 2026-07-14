@@ -163,16 +163,34 @@ export function formatSlotSummary(
 ): string {
   if (slotMode === "SEPARATED") {
     return locale === "ko"
-      ? `연 ${annualSlots} + 캐 ${casualSlots} = ${totalSlots}`
+      ? `연 ${annualSlots} + 캐주얼 ${casualSlots} = ${totalSlots}`
       : `Annual ${annualSlots} + Casual ${casualSlots} = ${totalSlots}`;
   }
   return locale === "ko" ? `${totalSlots}명` : `${totalSlots} slots`;
 }
 
-export function formatConfirmedWaiting(locale: Locale, confirmed: number, waiting: number): string {
+export function formatConfirmedWaiting(
+  locale: Locale,
+  slotMode: "SEPARATED" | "COMBINED",
+  counts: {
+    confirmedAnnual: number;
+    confirmedCasual: number;
+    waitingAnnual: number;
+    waitingCasual: number;
+  }
+): string {
+  const confirmedTotal = counts.confirmedAnnual + counts.confirmedCasual;
+  const waitingTotal = counts.waitingAnnual + counts.waitingCasual;
+
+  if (slotMode === "SEPARATED") {
+    return locale === "ko"
+      ? `멤버 ${counts.confirmedAnnual}명 확정(대기 ${counts.waitingAnnual}) · 캐주얼 ${counts.confirmedCasual}명 확정(대기 ${counts.waitingCasual})`
+      : `Annual ${counts.confirmedAnnual} confirmed (${counts.waitingAnnual} waiting) · Casual ${counts.confirmedCasual} confirmed (${counts.waitingCasual} waiting)`;
+  }
+
   return locale === "ko"
-    ? `${confirmed}명 확정 · ${waiting}명 대기`
-    : `${confirmed} confirmed · ${waiting} waiting`;
+    ? `${confirmedTotal}명 확정 · ${waitingTotal}명 대기`
+    : `${confirmedTotal} confirmed · ${waitingTotal} waiting`;
 }
 
 /**

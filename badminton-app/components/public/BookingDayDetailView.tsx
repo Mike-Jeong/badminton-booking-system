@@ -20,6 +20,7 @@ interface BookingItem {
   id: string;
   name: string;
   status: "CONFIRMED" | "WAITING" | "CANCELLED";
+  memberType: "ANNUAL" | "CASUAL";
 }
 
 interface BookingDayDetail {
@@ -44,6 +45,10 @@ export function BookingDayDetailView({ bookingDay }: { bookingDay: BookingDayDet
 
   const confirmed = bookingDay.bookings.filter((b) => b.status === "CONFIRMED");
   const waiting = bookingDay.bookings.filter((b) => b.status === "WAITING");
+  const confirmedAnnual = confirmed.filter((b) => b.memberType === "ANNUAL").length;
+  const confirmedCasual = confirmed.filter((b) => b.memberType === "CASUAL").length;
+  const waitingAnnual = waiting.filter((b) => b.memberType === "ANNUAL").length;
+  const waitingCasual = waiting.filter((b) => b.memberType === "CASUAL").length;
   const ended = isBookingDayEnded(new Date(bookingDay.date), bookingDay.endTime);
 
   return (
@@ -98,7 +103,14 @@ export function BookingDayDetailView({ bookingDay }: { bookingDay: BookingDayDet
           </div>
           <div>
             <p className="text-muted-foreground">{t.confirmedWaiting}</p>
-            <p className="font-medium">{formatConfirmedWaiting(locale, confirmed.length, waiting.length)}</p>
+            <p className="font-medium">
+              {formatConfirmedWaiting(locale, bookingDay.slotMode, {
+                confirmedAnnual,
+                confirmedCasual,
+                waitingAnnual,
+                waitingCasual,
+              })}
+            </p>
           </div>
         </CardContent>
       </Card>

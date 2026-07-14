@@ -30,8 +30,14 @@ export default async function AdminBookingDayDetailPage({
     throw err;
   }
 
-  const confirmedCount = bookingDay.bookings.filter((b) => b.status === "CONFIRMED").length;
-  const waitingCount = bookingDay.bookings.filter((b) => b.status === "WAITING").length;
+  const confirmed = bookingDay.bookings.filter((b) => b.status === "CONFIRMED");
+  const waiting = bookingDay.bookings.filter((b) => b.status === "WAITING");
+  const confirmedCount = confirmed.length;
+  const waitingCount = waiting.length;
+  const confirmedAnnual = confirmed.filter((b) => b.memberType === "ANNUAL").length;
+  const confirmedCasual = confirmed.filter((b) => b.memberType === "CASUAL").length;
+  const waitingAnnual = waiting.filter((b) => b.memberType === "ANNUAL").length;
+  const waitingCasual = waiting.filter((b) => b.memberType === "CASUAL").length;
   const adminBookings = await listBookingsForAdmin(id);
 
   return (
@@ -82,11 +88,25 @@ export default async function AdminBookingDayDetailPage({
           </div>
           <div>
             <p className="text-muted-foreground">확정 인원</p>
-            <p className="font-medium">{confirmedCount}명</p>
+            <p className="font-medium">
+              {confirmedCount}명
+              {bookingDay.slotMode === "SEPARATED" && (
+                <span className="ml-1 text-sm font-normal text-muted-foreground">
+                  (연 {confirmedAnnual}/{bookingDay.annualSlots} · 캐 {confirmedCasual}/{bookingDay.casualSlots})
+                </span>
+              )}
+            </p>
           </div>
           <div>
             <p className="text-muted-foreground">대기 인원</p>
-            <p className="font-medium">{waitingCount}명</p>
+            <p className="font-medium">
+              {waitingCount}명
+              {bookingDay.slotMode === "SEPARATED" && (waitingAnnual > 0 || waitingCasual > 0) && (
+                <span className="ml-1 text-sm font-normal text-muted-foreground">
+                  (연 {waitingAnnual} · 캐 {waitingCasual})
+                </span>
+              )}
+            </p>
           </div>
         </CardContent>
       </Card>
