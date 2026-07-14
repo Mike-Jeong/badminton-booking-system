@@ -184,8 +184,8 @@ export function formatConfirmedWaiting(
 
   if (slotMode === "SEPARATED") {
     return locale === "ko"
-      ? `멤버 ${counts.confirmedAnnual}명 확정(대기 ${counts.waitingAnnual}) · 캐주얼 ${counts.confirmedCasual}명 확정(대기 ${counts.waitingCasual})`
-      : `Annual ${counts.confirmedAnnual} confirmed (${counts.waitingAnnual} waiting) · Casual ${counts.confirmedCasual} confirmed (${counts.waitingCasual} waiting)`;
+      ? `멤버 ${counts.confirmedAnnual}명 확정(대기 ${counts.waitingAnnual})\n캐주얼 ${counts.confirmedCasual}명 확정(대기 ${counts.waitingCasual})`
+      : `Annual ${counts.confirmedAnnual} confirmed (${counts.waitingAnnual} waiting)\nCasual ${counts.confirmedCasual} confirmed (${counts.waitingCasual} waiting)`;
   }
 
   return locale === "ko"

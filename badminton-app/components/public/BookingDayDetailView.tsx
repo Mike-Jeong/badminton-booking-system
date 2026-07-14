@@ -103,7 +103,7 @@ export function BookingDayDetailView({ bookingDay }: { bookingDay: BookingDayDet
           </div>
           <div>
             <p className="text-muted-foreground">{t.confirmedWaiting}</p>
-            <p className="font-medium">
+            <p className="whitespace-pre-line font-medium">
               {formatConfirmedWaiting(locale, bookingDay.slotMode, {
                 confirmedAnnual,
                 confirmedCasual,
