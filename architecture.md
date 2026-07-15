@@ -121,10 +121,11 @@ prisma/
 - 하드 삭제 없음(확정, decisions.md D-07). 관리자 화면의 "삭제" 액션은 `deactivateAnnualMember`를 호출해 `isActive=false`로만 처리한다.
 
 ### MonthlyMemberService (`lib/services/monthlyMemberService.ts`)
-- `createMonthlyMember(input)` / `updateMonthlyMember(id, input)` / `deactivateMonthlyMember(id)`
+- `createMonthlyMember(input)` / `createMonthlyMembersBulk(input)` / `updateMonthlyMember(id, input)` / `deleteMonthlyMember(id)`
 - `listMonthlyMembers(filter)` — 연/월 단위 필터
 - `applyMonthlyMembersToBookingDay(bookingDayId)`
-- 하드 삭제 없음(확정, decisions.md D-07). 관리자 화면의 "삭제" 액션은 `deactivateMonthlyMember`를 호출해 `isActive=false`로만 처리한다. 특정 멤버를 특정 요일 자동 배정에서 영구 제외하고 싶을 때도 이 비활성화로 처리한다(D-08).
+- 비활성화(`isActive=false`)는 `updateMonthlyMember`로, 완전 삭제(하드 삭제)는 `deleteMonthlyMember`로 별도 제공한다(decisions.md D-26 — MonthlyMember는 Booking 등 다른 레코드가 FK로 참조하지 않아, AnnualMember와 달리 D-07의 "하드 삭제 없음" 원칙을 적용할 이유가 없다). 특정 멤버를 특정 요일 자동 배정에서 영구 제외하고 싶을 때는 비활성화로 처리한다(D-08).
+- `createMonthlyMembersBulk`는 여러 요일을 한 번에 등록할 때 쓰며, 요일별로 `createMonthlyMember`를 호출해 일부 요일이 중복이어도 나머지는 정상 등록되는 부분 성공을 허용한다(decisions.md D-25).
 
 ### DashboardService (`lib/services/dashboardService.ts`)
 - `getTodaySummary()` — Pacific/Auckland 기준 "오늘"
@@ -296,10 +297,9 @@ model Booking {
 | PATCH | `/api/admin/annual-members/[id]` | 연 멤버 수정/비활성화 |
 | DELETE | `/api/admin/annual-members/[id]` | 연 멤버 "삭제" (실제로는 `isActive=false` 소프트 삭제, 하드 삭제 아님) |
 | GET | `/api/admin/monthly-members` | 월 멤버 목록(연/월 필터) |
-| POST | `/api/admin/monthly-members` | 월 멤버 등록 |
-| PATCH | `/api/admin/monthly-members/[id]` | 월 멤버 수정/비활성화 |
-| DELETE | `/api/admin/monthly-members/[id]` | 월 멤버 "삭제" (실제로는 `isActive=false` 소프트 삭제, 하드 삭제 아님) |
-| POST | `/api/admin/monthly-members/apply` | 특정 연/월(옵션 요일) 일괄 자동배정 |
+| POST | `/api/admin/monthly-members` | 월 멤버 등록(`dayOfWeeks` 배열로 여러 요일 한 번에 등록, decisions.md D-25) |
+| PATCH | `/api/admin/monthly-members/[id]` | 월 멤버 수정(연/월/요일/메모, D-21) 및 활성/비활성 토글 |
+| DELETE | `/api/admin/monthly-members/[id]` | 월 멤버 완전 삭제(하드 삭제, decisions.md D-26) |
 | GET | `/api/admin/dashboard` | 대시보드 요약 데이터 |
 
 예약자 목록/연 멤버 목록을 반환하는 GET 라우트는 DB의 `phoneEncrypted`를 서버(route handler)에서 복호화해 평문 전화번호로 응답에 담는다. 클라이언트로는 항상 복호화된 평문이 내려가며, `phoneHash`/`phoneEncrypted` 원값은 API 응답에 노출하지 않는다.

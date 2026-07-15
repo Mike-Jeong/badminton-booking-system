@@ -1,9 +1,13 @@
 /**
  * MonthlyMemberService (architecture.md 2장, requirements.md 5·6·19번)
- * - createMonthlyMember / updateMonthlyMember / deactivateMonthlyMember / listMonthlyMembers
+ * - createMonthlyMember / createMonthlyMembersBulk / updateMonthlyMember / deleteMonthlyMember / listMonthlyMembers
  * - applyMonthlyMembersToBookingDay
- * - 하드 삭제 없음(decisions.md D-07). "삭제" 액션은 deactivateMonthlyMember(isActive=false)로 처리.
+ * - 활성/비활성 토글은 updateMonthlyMember(isActive)로 처리한다. 완전 삭제(하드 삭제)는
+ *   deleteMonthlyMember로 별도 제공한다 — MonthlyMember는 다른 레코드가 FK로 참조하지 않아
+ *   AnnualMember/Booking과 달리 하드 삭제가 이력 무결성을 해치지 않는다(decisions.md D-26,
+ *   D-07 정책의 적용 범위를 좁힘).
  * - 연도/월/요일 수정 가능(decisions.md D-21), 등록 시 기존 예약일 소급 배정 옵션(decisions.md D-22).
+ * - 한 연 멤버를 여러 요일에 한 번에 등록하는 벌크 등록 지원(decisions.md D-25).
  */
 
 import { prisma } from "@/lib/db/prisma";
@@ -128,6 +132,66 @@ export async function createMonthlyMember(input: MonthlyMemberInput, options: Cr
   return { ...created, existingBookingDayAssignment };
 }
 
+export interface CreateMonthlyMembersBulkInput {
+  annualMemberId: string;
+  year: number;
+  month: number;
+  dayOfWeeks: number[];
+  memo?: string | null;
+}
+
+export interface CreateMonthlyMembersBulkResult {
+  created: Awaited<ReturnType<typeof createMonthlyMember>>[];
+  skipped: { dayOfWeek: number; message: string }[];
+  existingBookingDayAssignment: ApplyResult;
+}
+
+/**
+ * 한 연 멤버를 여러 요일에 한 번에 등록한다(decisions.md D-25 — "월/수/금 배정하려면 세 번
+ * 등록해야 하는" 번거로움을 해소). 요일별로 개별 createMonthlyMember를 호출하며, 이미 등록된
+ * 요일(중복)은 건너뛰고 나머지 요일은 계속 진행한다(부분 성공 허용).
+ */
+export async function createMonthlyMembersBulk(
+  input: CreateMonthlyMembersBulkInput,
+  options: CreateMonthlyMemberOptions = {}
+): Promise<CreateMonthlyMembersBulkResult> {
+  if (!Array.isArray(input.dayOfWeeks) || input.dayOfWeeks.length === 0) {
+    throw new ValidationError("dayOfWeeks는 최소 1개 이상 선택해야 합니다.");
+  }
+
+  const created: Awaited<ReturnType<typeof createMonthlyMember>>[] = [];
+  const skipped: { dayOfWeek: number; message: string }[] = [];
+  const existingBookingDayAssignment: ApplyResult = { createdCount: 0, skippedCount: 0 };
+
+  for (const dayOfWeek of input.dayOfWeeks) {
+    try {
+      const result = await createMonthlyMember(
+        {
+          annualMemberId: input.annualMemberId,
+          year: input.year,
+          month: input.month,
+          dayOfWeek,
+          memo: input.memo,
+        },
+        options
+      );
+      created.push(result);
+      if (result.existingBookingDayAssignment) {
+        existingBookingDayAssignment.createdCount += result.existingBookingDayAssignment.createdCount;
+        existingBookingDayAssignment.skippedCount += result.existingBookingDayAssignment.skippedCount;
+      }
+    } catch (err) {
+      if (err instanceof ConflictError) {
+        skipped.push({ dayOfWeek, message: err.message });
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  return { created, skipped, existingBookingDayAssignment };
+}
+
 /**
  * 월 멤버 수정. 연도/월/요일도 변경 가능하다(decisions.md D-21). 대상(연 멤버) 자체는 바꿀 수
  * 없고, 새 연/월/요일 조합이 다른 레코드와 중복되면 거부한다.
@@ -181,13 +245,18 @@ export async function updateMonthlyMember(id: string, input: MonthlyMemberUpdate
   });
 }
 
-/** 하드 삭제 없음(decisions.md D-07). 비활성화 후에는 자동 배정 대상에서 제외된다. */
-export async function deactivateMonthlyMember(id: string) {
+/**
+ * 월 멤버 완전 삭제(하드 삭제, decisions.md D-26). MonthlyMember는 Booking 등 다른 레코드가
+ * FK로 참조하지 않으므로, 삭제해도 예약 이력의 무결성에 영향이 없다. 비활성화(isActive=false)와
+ * 별개의 액션으로, 잘못 등록했거나 더 이상 필요 없는 등록을 목록에서 완전히 지우고 싶을 때 쓴다.
+ */
+export async function deleteMonthlyMember(id: string) {
   const existing = await prisma.monthlyMember.findUnique({ where: { id } });
   if (!existing) {
     throw new NotFoundError("월 멤버를 찾을 수 없습니다.");
   }
-  return prisma.monthlyMember.update({ where: { id }, data: { isActive: false } });
+  await prisma.monthlyMember.delete({ where: { id } });
+  return { id };
 }
 
 /**

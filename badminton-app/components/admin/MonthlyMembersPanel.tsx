@@ -75,15 +75,25 @@ export function MonthlyMembersPanel({
     annualMemberId: annualMembers[0]?.id ?? "",
     year: String(year),
     month: String(month),
-    dayOfWeek: "1",
+    dayOfWeeks: [] as number[],
     memo: "",
   });
   const [createError, setCreateError] = useState<string | null>(null);
   const [createLoading, setCreateLoading] = useState(false);
-  const [createAssignmentResult, setCreateAssignmentResult] = useState<{
-    createdCount: number;
-    skippedCount: number;
+  const [createResult, setCreateResult] = useState<{
+    createdDays: number[];
+    skippedDays: { dayOfWeek: number; message: string }[];
+    assignment: { createdCount: number; skippedCount: number };
   } | null>(null);
+
+  function toggleCreateDayOfWeek(day: number) {
+    setCreateForm((prev) => ({
+      ...prev,
+      dayOfWeeks: prev.dayOfWeeks.includes(day)
+        ? prev.dayOfWeeks.filter((d) => d !== day)
+        : [...prev.dayOfWeeks, day].sort((a, b) => a - b),
+    }));
+  }
 
   const [rowLoadingId, setRowLoadingId] = useState<string | null>(null);
   const [rowError, setRowError] = useState<Record<string, string>>({});
@@ -103,12 +113,17 @@ export function MonthlyMembersPanel({
   async function handleCreateSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setCreateError(null);
-    setCreateAssignmentResult(null);
+    setCreateResult(null);
+
+    if (createForm.dayOfWeeks.length === 0) {
+      setCreateError("적용 요일을 1개 이상 선택해주세요.");
+      return;
+    }
 
     // 등록한 연/월/요일과 일치하는 예약일이 이미 만들어져 있을 수 있다. 무조건 소급 배정하면
     // 같은 요일에 세션이 여러 개 있을 때 중복 배정될 수 있어 관리자 확인을 거친다(decisions.md D-22).
     const applyToExistingBookingDays = window.confirm(
-      "이 연/월/요일과 일치하는, 이미 생성되어 있는 예약일에도 자동으로 추가하시겠습니까?\n(같은 요일에 세션이 여러 개 있다면 '취소'를 눌러 건너뛸 수 있습니다.)"
+      "선택한 연/월/요일과 일치하는, 이미 생성되어 있는 예약일에도 자동으로 추가하시겠습니까?\n(같은 요일에 세션이 여러 개 있다면 '취소'를 눌러 건너뛸 수 있습니다.)"
     );
 
     setCreateLoading(true);
@@ -120,7 +135,7 @@ export function MonthlyMembersPanel({
           annualMemberId: createForm.annualMemberId,
           year: Number(createForm.year),
           month: Number(createForm.month),
-          dayOfWeek: Number(createForm.dayOfWeek),
+          dayOfWeeks: createForm.dayOfWeeks,
           memo: createForm.memo || null,
           applyToExistingBookingDays,
         }),
@@ -130,10 +145,17 @@ export function MonthlyMembersPanel({
         setCreateError(json?.error?.message ?? "등록에 실패했습니다.");
         return;
       }
-      if (json.data?.existingBookingDayAssignment) {
-        setCreateAssignmentResult(json.data.existingBookingDayAssignment);
-      }
-      setCreateForm((prev) => ({ ...prev, memo: "" }));
+      const data: {
+        created: { dayOfWeek: number }[];
+        skipped: { dayOfWeek: number; message: string }[];
+        existingBookingDayAssignment: { createdCount: number; skippedCount: number };
+      } = json.data;
+      setCreateResult({
+        createdDays: data.created.map((c) => c.dayOfWeek),
+        skippedDays: data.skipped,
+        assignment: data.existingBookingDayAssignment,
+      });
+      setCreateForm((prev) => ({ ...prev, memo: "", dayOfWeeks: [] }));
       router.refresh();
     } catch {
       setCreateError("네트워크 오류가 발생했습니다.");
@@ -185,16 +207,39 @@ export function MonthlyMembersPanel({
     setRowLoadingId(member.id);
     setRowError((prev) => ({ ...prev, [member.id]: "" }));
     try {
-      const res = member.isActive
-        ? await fetch(`/api/admin/monthly-members/${member.id}`, { method: "DELETE" })
-        : await fetch(`/api/admin/monthly-members/${member.id}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ isActive: true }),
-          });
+      const res = await fetch(`/api/admin/monthly-members/${member.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isActive: !member.isActive }),
+      });
       const json = await res.json();
       if (!res.ok) {
         setRowError((prev) => ({ ...prev, [member.id]: json?.error?.message ?? "처리에 실패했습니다." }));
+        return;
+      }
+      router.refresh();
+    } catch {
+      setRowError((prev) => ({ ...prev, [member.id]: "네트워크 오류가 발생했습니다." }));
+    } finally {
+      setRowLoadingId(null);
+    }
+  }
+
+  async function handleDelete(member: MonthlyMemberRow) {
+    if (
+      !window.confirm(
+        `${member.annualMemberName}의 ${DAY_LABELS[member.dayOfWeek]}요일(${member.year}년 ${member.month}월) 월 멤버 등록을 완전히 삭제하시겠습니까?\n되돌릴 수 없습니다.`
+      )
+    ) {
+      return;
+    }
+    setRowLoadingId(member.id);
+    setRowError((prev) => ({ ...prev, [member.id]: "" }));
+    try {
+      const res = await fetch(`/api/admin/monthly-members/${member.id}`, { method: "DELETE" });
+      const json = await res.json();
+      if (!res.ok) {
+        setRowError((prev) => ({ ...prev, [member.id]: json?.error?.message ?? "삭제에 실패했습니다." }));
         return;
       }
       router.refresh();
@@ -252,7 +297,7 @@ export function MonthlyMembersPanel({
               먼저 연 멤버 관리 화면에서 활성 연 멤버를 등록해주세요.
             </p>
           ) : (
-            <form onSubmit={handleCreateSubmit} className="grid grid-cols-1 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+            <form onSubmit={handleCreateSubmit} className="grid grid-cols-1 gap-4 sm:grid-cols-3 lg:grid-cols-4">
               <div className="space-y-2">
                 <Label htmlFor="mm-annual">연 멤버</Label>
                 <Select
@@ -290,20 +335,6 @@ export function MonthlyMembersPanel({
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="mm-dayOfWeek">적용 요일</Label>
-                <Select
-                  id="mm-dayOfWeek"
-                  value={createForm.dayOfWeek}
-                  onChange={(e) => setCreateForm((prev) => ({ ...prev, dayOfWeek: e.target.value }))}
-                >
-                  {DAY_LABELS.map((label, idx) => (
-                    <option key={idx} value={idx}>
-                      {label}요일
-                    </option>
-                  ))}
-                </Select>
-              </div>
-              <div className="space-y-2">
                 <Label htmlFor="mm-memo">메모 (선택)</Label>
                 <Input
                   id="mm-memo"
@@ -311,12 +342,41 @@ export function MonthlyMembersPanel({
                   onChange={(e) => setCreateForm((prev) => ({ ...prev, memo: e.target.value }))}
                 />
               </div>
+              <div className="col-span-full space-y-2">
+                <Label>적용 요일 (복수 선택 가능)</Label>
+                <div className="flex flex-wrap gap-3">
+                  {DAY_LABELS.map((label, idx) => (
+                    <label key={idx} className="flex items-center gap-1.5 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={createForm.dayOfWeeks.includes(idx)}
+                        onChange={() => toggleCreateDayOfWeek(idx)}
+                        className="h-4 w-4 rounded border-input"
+                      />
+                      {label}요일
+                    </label>
+                  ))}
+                </div>
+              </div>
               <div className="col-span-full">
-                {createAssignmentResult && (
-                  <p aria-live="polite" className="mb-2 text-sm text-muted-foreground">
-                    기존 예약일 자동 배정: 생성 {createAssignmentResult.createdCount}건 · 스킵{" "}
-                    {createAssignmentResult.skippedCount}건
-                  </p>
+                {createResult && (
+                  <div aria-live="polite" className="mb-2 text-sm text-muted-foreground">
+                    <p>
+                      {createResult.createdDays.length}개 요일 등록 완료
+                      {createResult.createdDays.length > 0 &&
+                        ` (${createResult.createdDays.map((d) => DAY_LABELS[d]).join(", ")})`}
+                      {createResult.skippedDays.length > 0 &&
+                        ` · 이미 등록되어 건너뜀: ${createResult.skippedDays
+                          .map((s) => DAY_LABELS[s.dayOfWeek])
+                          .join(", ")}`}
+                    </p>
+                    {(createResult.assignment.createdCount > 0 || createResult.assignment.skippedCount > 0) && (
+                      <p>
+                        기존 예약일 자동 배정: 생성 {createResult.assignment.createdCount}건 · 스킵{" "}
+                        {createResult.assignment.skippedCount}건
+                      </p>
+                    )}
+                  </div>
                 )}
                 {createError && (
                   <p role="alert" aria-live="assertive" className="mb-2 text-sm text-destructive">
@@ -476,17 +536,25 @@ export function MonthlyMembersPanel({
                         </TableCell>
                         <TableCell>
                           <div className="flex flex-col items-start gap-1">
-                            <div className="flex gap-2">
+                            <div className="flex flex-wrap gap-2">
                               <Button size="sm" variant="outline" onClick={() => startEdit(mm)}>
                                 수정
                               </Button>
                               <Button
                                 size="sm"
-                                variant={mm.isActive ? "destructive" : "secondary"}
+                                variant="outline"
                                 disabled={rowLoadingId === mm.id}
                                 onClick={() => handleToggleActive(mm)}
                               >
                                 {mm.isActive ? "비활성화" : "활성화"}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                disabled={rowLoadingId === mm.id}
+                                onClick={() => handleDelete(mm)}
+                              >
+                                삭제
                               </Button>
                             </div>
                             {rowError[mm.id] && (

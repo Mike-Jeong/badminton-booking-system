@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { withApiHandler, jsonOk } from "@/lib/http";
 import { verifySessionFromRequest } from "@/lib/services/adminAuthService";
-import { createMonthlyMember, listMonthlyMembers } from "@/lib/services/monthlyMemberService";
+import { createMonthlyMembersBulk, listMonthlyMembers } from "@/lib/services/monthlyMemberService";
 import { ValidationError } from "@/lib/errors";
 
 /** 관리자(GET) — 월 멤버 목록(연/월 필터, ?year=&month=). */
@@ -17,7 +17,7 @@ export const GET = withApiHandler(async (req: NextRequest) => {
   return jsonOk(members);
 });
 
-/** 관리자(POST) — 월 멤버 등록. */
+/** 관리자(POST) — 월 멤버 등록. 여러 요일을 한 번에 등록할 수 있다(decisions.md D-25). */
 export const POST = withApiHandler(async (req: NextRequest) => {
   await verifySessionFromRequest(req);
 
@@ -27,20 +27,22 @@ export const POST = withApiHandler(async (req: NextRequest) => {
     typeof body.annualMemberId !== "string" ||
     typeof body.year !== "number" ||
     typeof body.month !== "number" ||
-    typeof body.dayOfWeek !== "number"
+    !Array.isArray(body.dayOfWeeks) ||
+    body.dayOfWeeks.length === 0 ||
+    !body.dayOfWeeks.every((d: unknown) => typeof d === "number")
   ) {
-    throw new ValidationError("annualMemberId, year, month, dayOfWeek가 필요합니다.");
+    throw new ValidationError("annualMemberId, year, month, dayOfWeeks(1개 이상)가 필요합니다.");
   }
 
-  const member = await createMonthlyMember(
+  const result = await createMonthlyMembersBulk(
     {
       annualMemberId: body.annualMemberId,
       year: body.year,
       month: body.month,
-      dayOfWeek: body.dayOfWeek,
+      dayOfWeeks: body.dayOfWeeks,
       memo: body.memo ?? null,
     },
     { applyToExistingBookingDays: body.applyToExistingBookingDays ?? false }
   );
-  return jsonOk(member, 201);
+  return jsonOk(result, 201);
 });
