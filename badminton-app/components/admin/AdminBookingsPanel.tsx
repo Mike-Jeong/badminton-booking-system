@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { AttendanceBadge } from "@/components/admin/AttendanceBadge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table,
@@ -23,6 +24,8 @@ export interface AdminBookingRow {
   memberType: "ANNUAL" | "CASUAL";
   status: "WAITING" | "CONFIRMED" | "CANCELLED";
   source: "USER" | "ADMIN" | "MONTHLY_MEMBER_AUTO";
+  checkedInAt: string | Date | null;
+  checkedOutAt: string | Date | null;
 }
 
 const STATUS_LABEL: Record<AdminBookingRow["status"], string> = {
@@ -97,6 +100,61 @@ export function AdminBookingsPanel({
     }
   }
 
+  async function handleCheckIn(id: string) {
+    setRowLoadingId(id);
+    setRowError((prev) => ({ ...prev, [id]: "" }));
+    try {
+      const res = await fetch(`/api/admin/bookings/${id}/check-in`, { method: "POST" });
+      const json = await res.json();
+      if (!res.ok) {
+        setRowError((prev) => ({ ...prev, [id]: json?.error?.message ?? "입장 처리에 실패했습니다." }));
+        return;
+      }
+      router.refresh();
+    } catch {
+      setRowError((prev) => ({ ...prev, [id]: "네트워크 오류가 발생했습니다." }));
+    } finally {
+      setRowLoadingId(null);
+    }
+  }
+
+  async function handleCheckOut(id: string) {
+    setRowLoadingId(id);
+    setRowError((prev) => ({ ...prev, [id]: "" }));
+    try {
+      const res = await fetch(`/api/admin/bookings/${id}/check-out`, { method: "POST" });
+      const json = await res.json();
+      if (!res.ok) {
+        setRowError((prev) => ({ ...prev, [id]: json?.error?.message ?? "퇴장 처리에 실패했습니다." }));
+        return;
+      }
+      router.refresh();
+    } catch {
+      setRowError((prev) => ({ ...prev, [id]: "네트워크 오류가 발생했습니다." }));
+    } finally {
+      setRowLoadingId(null);
+    }
+  }
+
+  async function handleResetCheckIn(id: string) {
+    if (!window.confirm("입장/퇴장 처리를 초기화하시겠습니까?")) return;
+    setRowLoadingId(id);
+    setRowError((prev) => ({ ...prev, [id]: "" }));
+    try {
+      const res = await fetch(`/api/admin/bookings/${id}/check-in`, { method: "DELETE" });
+      const json = await res.json();
+      if (!res.ok) {
+        setRowError((prev) => ({ ...prev, [id]: json?.error?.message ?? "초기화에 실패했습니다." }));
+        return;
+      }
+      router.refresh();
+    } catch {
+      setRowError((prev) => ({ ...prev, [id]: "네트워크 오류가 발생했습니다." }));
+    } finally {
+      setRowLoadingId(null);
+    }
+  }
+
   async function handleAddSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setAddError(null);
@@ -135,13 +193,14 @@ export function AdminBookingsPanel({
               <TableHead>유형</TableHead>
               <TableHead>상태</TableHead>
               <TableHead>구분</TableHead>
+              <TableHead>출석</TableHead>
               <TableHead></TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {bookings.length === 0 && (
               <TableRow>
-                <TableCell colSpan={6} className="py-6 text-center text-muted-foreground">
+                <TableCell colSpan={7} className="py-6 text-center text-muted-foreground">
                   아직 예약자가 없습니다.
                 </TableCell>
               </TableRow>
@@ -158,9 +217,16 @@ export function AdminBookingsPanel({
                 </TableCell>
                 <TableCell className="text-xs text-muted-foreground">{SOURCE_LABEL[b.source]}</TableCell>
                 <TableCell>
+                  {b.status === "CONFIRMED" ? (
+                    <AttendanceBadge checkedInAt={b.checkedInAt} checkedOutAt={b.checkedOutAt} />
+                  ) : (
+                    <span className="text-xs text-muted-foreground">-</span>
+                  )}
+                </TableCell>
+                <TableCell>
                   {b.status !== "CANCELLED" && (
                     <div className="flex flex-col items-start gap-1">
-                      <div className="flex gap-2">
+                      <div className="flex flex-wrap gap-2">
                         {b.status === "WAITING" && (
                           <Button
                             size="sm"
@@ -168,6 +234,36 @@ export function AdminBookingsPanel({
                             onClick={() => handleApprove(b.id)}
                           >
                             승인
+                          </Button>
+                        )}
+                        {b.status === "CONFIRMED" && !b.checkedInAt && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={rowLoadingId === b.id}
+                            onClick={() => handleCheckIn(b.id)}
+                          >
+                            입장 처리
+                          </Button>
+                        )}
+                        {b.status === "CONFIRMED" && b.checkedInAt && !b.checkedOutAt && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={rowLoadingId === b.id}
+                            onClick={() => handleCheckOut(b.id)}
+                          >
+                            퇴장 처리
+                          </Button>
+                        )}
+                        {b.status === "CONFIRMED" && b.checkedInAt && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={rowLoadingId === b.id}
+                            onClick={() => handleResetCheckIn(b.id)}
+                          >
+                            초기화
                           </Button>
                         )}
                         <Button

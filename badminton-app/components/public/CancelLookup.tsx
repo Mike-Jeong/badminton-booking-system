@@ -1,10 +1,12 @@
 "use client";
 
 import { useState } from "react";
+import { QRCodeSVG } from "qrcode.react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Dialog } from "@/components/ui/dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table,
@@ -15,6 +17,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatDateOnlyInTimeZone, getTodayDateOnlyInTimeZone, isBookingDayEnded } from "@/lib/timezone";
+import { encodeBookingQrValue } from "@/lib/checkInQr";
 import { useLocale } from "@/lib/i18n/LanguageContext";
 import { dictionary, translateApiErrorMessage } from "@/lib/i18n/dictionary";
 
@@ -48,6 +51,7 @@ export function CancelLookup() {
   const [rowError, setRowError] = useState<Record<string, string>>({});
   const [fromDate, setFromDate] = useState(defaultFrom);
   const [toDate, setToDate] = useState(defaultTo);
+  const [qrBookingId, setQrBookingId] = useState<string | null>(null);
 
   const filteredBookings =
     bookings?.filter((b) => {
@@ -222,26 +226,33 @@ export function CancelLookup() {
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      {b.status !== "CANCELLED" &&
-                        (isBookingDayEnded(new Date(b.bookingDay.date), b.bookingDay.endTime) ? (
-                          <p className="text-xs text-muted-foreground">{t.endedNote}</p>
-                        ) : (
-                          <div className="space-y-1">
-                            <Button
-                              variant="destructive"
-                              size="sm"
-                              disabled={cancellingId === b.id}
-                              onClick={() => handleCancel(b.id)}
-                            >
-                              {cancellingId === b.id ? t.cancelling : t.cancel}
+                      <div className="space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          {b.status === "CONFIRMED" && (
+                            <Button variant="outline" size="sm" onClick={() => setQrBookingId(b.id)}>
+                              {t.qrButton}
                             </Button>
-                            {rowError[b.id] && (
-                              <p role="alert" aria-live="assertive" className="text-xs text-destructive">
-                                {rowError[b.id]}
-                              </p>
-                            )}
-                          </div>
-                        ))}
+                          )}
+                          {b.status !== "CANCELLED" &&
+                            (isBookingDayEnded(new Date(b.bookingDay.date), b.bookingDay.endTime) ? (
+                              <span className="text-xs text-muted-foreground">{t.endedNote}</span>
+                            ) : (
+                              <Button
+                                variant="destructive"
+                                size="sm"
+                                disabled={cancellingId === b.id}
+                                onClick={() => handleCancel(b.id)}
+                              >
+                                {cancellingId === b.id ? t.cancelling : t.cancel}
+                              </Button>
+                            ))}
+                        </div>
+                        {rowError[b.id] && (
+                          <p role="alert" aria-live="assertive" className="text-xs text-destructive">
+                            {rowError[b.id]}
+                          </p>
+                        )}
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -250,6 +261,18 @@ export function CancelLookup() {
           </CardContent>
         </Card>
       )}
+
+      <Dialog
+        open={qrBookingId !== null}
+        onClose={() => setQrBookingId(null)}
+        title={t.qrModalTitle}
+        closeLabel={t.close}
+      >
+        <div className="flex flex-col items-center gap-3">
+          {qrBookingId && <QRCodeSVG value={encodeBookingQrValue(qrBookingId)} size={200} />}
+          <p className="text-center text-sm text-muted-foreground">{t.qrInstruction}</p>
+        </div>
+      </Dialog>
     </div>
   );
 }

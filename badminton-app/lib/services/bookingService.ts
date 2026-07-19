@@ -2,6 +2,9 @@
  * BookingService (architecture.md 2·7장, requirements.md 7~14·18~20번)
  * - createBooking / cancelBooking / lookupBookingsByPhone / promoteWaitingBookings
  * - adminCreateBooking / adminChangeBookingStatus / adminCancelBooking / listBookingsForAdmin
+ * - checkInBooking / checkOutBooking / resetCheckInStatus / scanBookingCheckIn (decisions.md D-27,
+ *   회원 입장/퇴장 체크인) — CONFIRMED 예약에 한해 checkedInAt/checkedOutAt를 관리한다. 슬롯/대기
+ *   승격 로직과는 무관하다(체크인 여부가 슬롯을 비우거나 채우지 않음).
  *
  * 이번 범위(roadmap.md Phase 2+3): 사용자 예약 신청/취소, 자동승인/대기, 대기 자동승격,
  * 관리자 예약 운영 일부. 연/월 멤버 관리 UI, 월 멤버 자동 배정은 Phase 4에서 이어간다.
@@ -35,6 +38,8 @@ function toBookingDTO(booking: Booking) {
     createdAt: booking.createdAt,
     updatedAt: booking.updatedAt,
     cancelledAt: booking.cancelledAt,
+    checkedInAt: booking.checkedInAt,
+    checkedOutAt: booking.checkedOutAt,
   };
 }
 
@@ -301,6 +306,105 @@ export async function adminChangeBookingStatus(bookingId: string, status: Bookin
 }
 
 /**
+ * 관리자 수동 입장 처리(decisions.md D-27). CONFIRMED 예약에만 적용되며, 이미 입장 처리된
+ * 예약에 다시 호출하면 거부한다(실수 방지 — 다시 처리하려면 resetCheckInStatus로 초기화 후).
+ */
+export async function checkInBooking(bookingId: string) {
+  const updated = await prisma.$transaction(async (tx) => {
+    const booking = await tx.booking.findUnique({ where: { id: bookingId } });
+    if (!booking) {
+      throw new NotFoundError("예약을 찾을 수 없습니다.");
+    }
+    if (booking.status !== "CONFIRMED") {
+      throw new ConflictError("확정(CONFIRMED)된 예약만 입장 처리할 수 있습니다.");
+    }
+    if (booking.checkedInAt) {
+      throw new ConflictError("이미 입장 처리된 예약입니다.");
+    }
+    return tx.booking.update({ where: { id: bookingId }, data: { checkedInAt: new Date() } });
+  });
+  return toBookingDTO(updated);
+}
+
+/**
+ * 관리자 수동 퇴장 처리(decisions.md D-27). 입장 처리(checkedInAt)가 먼저 되어 있어야 하며,
+ * 이미 퇴장 처리된 예약에 다시 호출하면 거부한다.
+ */
+export async function checkOutBooking(bookingId: string) {
+  const updated = await prisma.$transaction(async (tx) => {
+    const booking = await tx.booking.findUnique({ where: { id: bookingId } });
+    if (!booking) {
+      throw new NotFoundError("예약을 찾을 수 없습니다.");
+    }
+    if (!booking.checkedInAt) {
+      throw new ConflictError("입장 처리되지 않은 예약은 퇴장 처리할 수 없습니다.");
+    }
+    if (booking.checkedOutAt) {
+      throw new ConflictError("이미 퇴장 처리된 예약입니다.");
+    }
+    return tx.booking.update({ where: { id: bookingId }, data: { checkedOutAt: new Date() } });
+  });
+  return toBookingDTO(updated);
+}
+
+/**
+ * 입장/퇴장 처리를 취소하고 초기 상태(둘 다 null)로 되돌린다(decisions.md D-27).
+ * 스캔 실수나 관리자 오처리를 정정하는 용도.
+ */
+export async function resetCheckInStatus(bookingId: string) {
+  const existing = await prisma.booking.findUnique({ where: { id: bookingId } });
+  if (!existing) {
+    throw new NotFoundError("예약을 찾을 수 없습니다.");
+  }
+  const updated = await prisma.booking.update({
+    where: { id: bookingId },
+    data: { checkedInAt: null, checkedOutAt: null },
+  });
+  return toBookingDTO(updated);
+}
+
+/**
+ * QR 스캔으로 호출되는 입장/퇴장 처리(decisions.md D-27). 수동 처리와 달리 현재 상태를 보고
+ * 자동으로 다음 단계를 판단한다: 미입장 → 입장, 입장만 됨 → 퇴장, 둘 다 됨 → 에러.
+ * bookingDayId를 함께 받아 스캔 화면이 열려 있는 예약일과 실제 예약의 예약일이 일치하는지
+ * 검증한다(다른 날짜의 QR을 잘못 스캔하는 실수 방지).
+ */
+export async function scanBookingCheckIn(bookingId: string, bookingDayId: string) {
+  const updated = await prisma.$transaction(async (tx) => {
+    const booking = await tx.booking.findUnique({ where: { id: bookingId } });
+    if (!booking) {
+      throw new NotFoundError("예약을 찾을 수 없습니다.");
+    }
+    if (booking.bookingDayId !== bookingDayId) {
+      throw new ConflictError("이 QR 코드는 다른 예약일의 예약입니다.");
+    }
+    if (booking.status !== "CONFIRMED") {
+      throw new ConflictError("확정(CONFIRMED)된 예약만 체크인할 수 있습니다.");
+    }
+
+    if (!booking.checkedInAt) {
+      const result = await tx.booking.update({
+        where: { id: bookingId },
+        data: { checkedInAt: new Date() },
+      });
+      return { booking: result, action: "CHECKED_IN" as const };
+    }
+    if (!booking.checkedOutAt) {
+      const result = await tx.booking.update({
+        where: { id: bookingId },
+        data: { checkedOutAt: new Date() },
+      });
+      return { booking: result, action: "CHECKED_OUT" as const };
+    }
+    throw new ConflictError(
+      "이미 입장/퇴장이 모두 처리되었습니다. 다시 처리하려면 관리자 화면에서 직접 수정해주세요."
+    );
+  });
+
+  return { booking: toBookingDTO(updated.booking), action: updated.action };
+}
+
+/**
  * 관리자용 예약자 전체 목록(이름/전화번호/상태/유형/source, architecture.md 4장).
  * 전화번호는 이 함수에서만 복호화한다.
  */
@@ -319,6 +423,8 @@ export async function listBookingsForAdmin(bookingDayId: string) {
     source: b.source,
     createdAt: b.createdAt,
     cancelledAt: b.cancelledAt,
+    checkedInAt: b.checkedInAt,
+    checkedOutAt: b.checkedOutAt,
   }));
 }
 

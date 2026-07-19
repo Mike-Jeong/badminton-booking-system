@@ -9,6 +9,7 @@ import { DeleteBookingDayButton } from "@/components/admin/DeleteBookingDayButto
 import { AdminBookingsPanel } from "@/components/admin/AdminBookingsPanel";
 import { ApplyMonthlyMembersButton } from "@/components/admin/ApplyMonthlyMembersButton";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 export const dynamic = "force-dynamic";
@@ -111,7 +112,12 @@ export default async function AdminBookingDayDetailPage({
         </CardContent>
       </Card>
 
-      <ApplyMonthlyMembersButton bookingDayId={bookingDay.id} />
+      <div className="flex flex-wrap items-center gap-2">
+        <ApplyMonthlyMembersButton bookingDayId={bookingDay.id} />
+        <Button asChild variant="outline">
+          <Link href={`/admin/booking-days/${bookingDay.id}/check-in`}>체크인 스캔 열기</Link>
+        </Button>
+      </div>
 
       <AdminBookingsPanel bookingDayId={bookingDay.id} bookings={adminBookings} />
 

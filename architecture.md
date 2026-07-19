@@ -23,7 +23,8 @@ app/
     login/page.tsx
     dashboard/page.tsx
     booking-days/page.tsx
-    booking-days/[id]/page.tsx        # 예약자 목록(전체 정보) + 상태변경 + 자동배정 버튼
+    booking-days/[id]/page.tsx        # 예약자 목록(전체 정보) + 상태변경 + 자동배정 버튼 + 출석 열/버튼
+    booking-days/[id]/check-in/page.tsx # 예약일별 체크인 스캔 화면 + 실시간 확정 예약자 명단 (decisions.md D-27)
     annual-members/page.tsx
     monthly-members/page.tsx
   api/
@@ -41,6 +42,9 @@ app/
     admin/bookings/route.ts           # POST (관리자 수동 예약 추가, source=ADMIN)
     admin/bookings/[id]/route.ts      # PATCH (상태 변경/승인)
     admin/bookings/[id]/cancel/route.ts # POST (관리자 취소 처리)
+    admin/bookings/[id]/check-in/route.ts  # POST (수동 입장), DELETE (초기화) — decisions.md D-27
+    admin/bookings/[id]/check-out/route.ts # POST (수동 퇴장) — decisions.md D-27
+    admin/booking-days/[id]/scan/route.ts  # POST { bookingId } — QR 스캔 처리, 입장/퇴장 자동 판단 — decisions.md D-27
     admin/annual-members/route.ts     # GET, POST
     admin/annual-members/[id]/route.ts # PATCH, DELETE
     admin/monthly-members/route.ts    # GET, POST
@@ -63,6 +67,7 @@ lib/
     dashboardService.ts      # 대시보드 집계
   normalize.ts                # normalizeName, normalizePhone
   timezone.ts                  # Pacific/Auckland 관련 유틸(오늘 날짜, dayOfWeek 계산)
+  checkInQr.ts                 # encodeBookingQrValue/decodeBookingQrValue — QR 값 "bkg:{bookingId}" 인코딩/디코딩 (decisions.md D-27)
   security/
     phoneCrypto.ts             # hashPhone(HMAC-SHA256), encryptPhone/decryptPhone(AES-256-GCM), PII_SECRET_KEY 기반
   auth/
@@ -113,6 +118,8 @@ prisma/
 - `adminChangeBookingStatus(bookingId, status)` — 대기→확정 승인. 슬롯 여유와 무관하게 항상 성공하며, 부족하면 예약일의 슬롯 수(분리 모드면 해당 memberType의 세부 슬롯 + totalSlots)를 자동 확장한다(decisions.md D-14, 관리자 액션 한정)
 - `adminCreateBooking(bookingDayId, name, phone)` — source=ADMIN. determineMemberType은 동일하게 수행하되, 슬롯이 부족하면 adminChangeBookingStatus와 동일하게 자동 확장 후 확정 처리한다(D-14)
 - `adminCancelBooking(bookingId)` — 전화번호 검증 없이 관리자 권한으로 취소, 승격 로직은 사용자 취소와 동일하게 호출
+- `checkInBooking(bookingId)` / `checkOutBooking(bookingId)` / `resetCheckInStatus(bookingId)` — 관리자 수동 체크인 처리(decisions.md D-27). `status !== CONFIRMED`이거나 순서가 어긋나면(`checkedInAt` 없이 퇴장 시도 등) `ConflictError`. D-23의 종료된 예약일 차단을 받지 않는다.
+- `scanBookingCheckIn(bookingId, bookingDayId)` — QR 스캔 처리 전용(decisions.md D-27). 예약의 `bookingDayId`가 스캔 화면의 `bookingDayId`와 다르면 `ConflictError`, 아니면 현재 상태에 따라 입장/퇴장을 자동 판단해 처리하고 `{ booking, action: "CHECKED_IN" | "CHECKED_OUT" }`을 반환한다.
 
 ### AnnualMemberService (`lib/services/annualMemberService.ts`)
 - `determineMemberType(name, phone)`: 정규화 → `hashPhone` 변환 → 활성 연 멤버 중 `normalizedName + phoneHash` 일치 조회 → ANNUAL/CASUAL 판정 (createBooking, applyMonthlyMembersToBookingDay 양쪽에서 재사용). 복호화가 필요 없다.
@@ -248,6 +255,8 @@ model Booking {
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
   cancelledAt           DateTime?
+  checkedInAt           DateTime? // 회원 입장 처리 시각(decisions.md D-27)
+  checkedOutAt          DateTime? // 회원 퇴장 처리 시각. checkedInAt 없이는 설정되지 않는다(decisions.md D-27)
 
   // 중복/재예약 판정(18번)은 status에 따라 조건부이므로 DB unique 제약으로는 표현하지 않고
   // 서비스 로직(트랜잭션 내 조회)으로 강제한다. 아래 인덱스는 조회 성능용.

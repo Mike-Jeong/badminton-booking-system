@@ -105,6 +105,8 @@ model Booking {
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
   cancelledAt           DateTime?
+  checkedInAt           DateTime? // 회원 입장 처리 시각(QR 스캔 또는 관리자 수동 처리)
+  checkedOutAt          DateTime? // 회원 퇴장 처리 시각. checkedInAt 없이는 설정되지 않는다.
 
   // 중복/재예약 판정(18번)은 status에 따라 조건부이므로 DB unique 제약으로는 표현하지 않고
   // 서비스 로직(트랜잭션 내 조회)으로 강제한다. 아래 인덱스는 조회 성능용.

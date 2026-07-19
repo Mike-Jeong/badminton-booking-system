@@ -255,6 +255,7 @@ CANCELLED
 - 연 멤버 등록/수정/비활성화
 - 월 멤버 등록/수정/비활성화
 - 월 멤버 자동 배정 실행
+- 회원 입장/퇴장(체크인) 처리 — QR 스캔 또는 수동 처리 (25번 참고)
 
 ## 16. 관리자 대시보드 (경고 지표 개정, decisions.md D-16)
 
@@ -334,6 +335,8 @@ Booking {
   createdAt
   updatedAt
   cancelledAt
+  checkedInAt       // 회원 입장 처리 시각 (nullable, decisions.md D-27)
+  checkedOutAt      // 회원 퇴장 처리 시각 (nullable, checkedInAt 없이는 설정 불가, decisions.md D-27)
 }
 ```
 
@@ -438,6 +441,7 @@ applyMonthlyMembersToBookingDay(bookingDayId)
 - React
 - Tailwind CSS
 - shadcn/ui
+- `qrcode.react`(QR 코드 생성), `jsqr`(카메라 프레임 QR 디코딩) — 체크인 기능 전용, decisions.md D-27
 
 **Backend**
 - Next.js Route Handlers
@@ -499,3 +503,19 @@ applyMonthlyMembersToBookingDay(bookingDayId)
 - 관리자 화면(`/admin/**`)은 이번 범위에서 제외하며 한글만 유지한다.
 - 화면 우측 상단의 언어 전환 버튼으로 즉시 전환하며, 선택한 언어는 브라우저에 저장되어 다음 방문 시에도 유지된다.
 - 예약일의 `label`(세션 라벨)처럼 관리자가 직접 입력한 자유 텍스트는 번역 대상이 아니다(UI 문구가 아닌 데이터이므로 입력된 그대로 표시).
+
+## 25. 회원 입장/퇴장(체크인) 관리 (decisions.md D-27)
+
+예약된 회원이 실제로 체육관에 도착했는지 확인하는 기능. 별도 출석 상태 enum 없이, `Booking`의 `checkedInAt`/`checkedOutAt` 두 타임스탬프 조합으로 상태를 표현한다: 미입장(둘 다 null) → 입장(`checkedInAt`만 설정) → 퇴장(둘 다 설정). `status === "CONFIRMED"`인 예약만 체크인 대상이며, 체크인 상태는 슬롯/대기 승격 로직에 영향을 주지 않는다.
+
+**25.1 QR 스캔 처리 (예약일별 스캔 화면)**
+- 공개 "내 예약 조회/취소" 화면에서 `CONFIRMED` 예약마다 "QR 코드 보기" 버튼을 눌러 그 예약 전용 QR 코드를 모달로 확인할 수 있다.
+- 관리자는 예약일 상세 화면에서 "체크인 스캔 열기" 링크로 그 예약일 전용 스캔 화면(`/admin/booking-days/[id]/check-in`)에 진입해, 노트북 카메라로 회원의 QR을 스캔한다.
+- 스캔된 예약이 그 스캔 화면의 예약일과 일치하지 않으면(다른 날짜의 QR을 스캔) 거부한다.
+- 스캔 시 현재 상태에 따라 자동으로 판단한다: 미입장 → 입장 처리, 입장만 됨 → 퇴장 처리, 입장/퇴장 모두 됨 → 오류(관리자 화면에서 직접 수정 안내).
+- 스캔 화면에는 그 예약일의 확정 예약자 실시간 명단(이름/전화번호/출석 상태)도 함께 표시된다.
+
+**25.2 수동 처리 (관리자 화면)**
+- 카메라를 쓸 수 없는 상황(회원이 QR을 못 보여줌, 카메라 문제 등)을 위해, 예약일 상세의 예약자 목록에서 관리자가 직접 입장/퇴장/초기화 버튼으로 처리할 수 있다.
+- 초기화는 `checkedInAt`/`checkedOutAt`을 모두 null로 되돌리는 실수 정정용 기능이며, 실행 전 확인 대화상자를 거친다.
+- 종료된 예약일(decisions.md D-23)이라도 관리자의 입장/퇴장/초기화 처리는 차단하지 않는다(관리자 액션은 사후 기록 정정이 가능해야 한다는 기존 원칙과 일관).

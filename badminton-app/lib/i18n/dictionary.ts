@@ -77,6 +77,10 @@ export const dictionary = {
       filterTo: "종료일",
       filterReset: "초기화",
       emptyFiltered: "선택한 기간에 해당하는 예약이 없습니다.",
+      qrButton: "QR 코드 보기",
+      qrModalTitle: "체크인 QR 코드",
+      qrInstruction: "입장/퇴장 시 이 QR 코드를 담당자에게 보여주세요.",
+      close: "닫기",
     },
   },
   en: {
@@ -150,6 +154,10 @@ export const dictionary = {
       filterTo: "To",
       filterReset: "Reset",
       emptyFiltered: "No bookings match the selected date range.",
+      qrButton: "View QR Code",
+      qrModalTitle: "Check-In QR Code",
+      qrInstruction: "Show this QR code to the duty person when you arrive or leave.",
+      close: "Close",
     },
   },
 } as const satisfies Record<Locale, unknown>;
