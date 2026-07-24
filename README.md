@@ -1,7 +1,8 @@
 # 배드민턴 예약 관리 시스템 / Badminton Club Booking System
 
 회원가입 없이 이름과 전화번호만으로 배드민턴 동호회 세션을 예약할 수 있는 웹 시스템입니다.
-A registration-free booking system for a badminton club — members reserve sessions with just their name and phone number.
+
+A registration-free booking system for a badminton club (members reserve sessions with just their name and phone number.)
 
 **[한국어](#한국어)** | **[English](#english)**
 
