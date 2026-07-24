@@ -52,7 +52,10 @@ export default async function AdminBookingDayDetailPage({
             {bookingDay.label ? ` · ${bookingDay.label}` : ""}
           </h1>
         </div>
-        {bookingDay.isOpen ? <Badge>공개</Badge> : <Badge variant="secondary">비공개</Badge>}
+        <div className="flex items-center gap-2">
+          {bookingDay.isOpen ? <Badge>공개</Badge> : <Badge variant="secondary">비공개</Badge>}
+          {bookingDay.clubDayPatternId && <Badge variant="outline">클럽데이</Badge>}
+        </div>
       </div>
 
       <Card>

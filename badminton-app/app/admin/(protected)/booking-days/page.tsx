@@ -46,12 +46,13 @@ export default async function AdminBookingDaysPage() {
                 <TableHead>슬롯</TableHead>
                 <TableHead>정책</TableHead>
                 <TableHead>공개</TableHead>
+                <TableHead>구분</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {bookingDays.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={9} className="py-8 text-center text-muted-foreground">
+                  <TableCell colSpan={10} className="py-8 text-center text-muted-foreground">
                     생성된 예약일이 없습니다.
                   </TableCell>
                 </TableRow>
@@ -82,6 +83,9 @@ export default async function AdminBookingDaysPage() {
                     ) : (
                       <Badge variant="secondary">비공개</Badge>
                     )}
+                  </TableCell>
+                  <TableCell>
+                    {bd.clubDayPatternId ? <Badge variant="outline">클럽데이</Badge> : "-"}
                   </TableCell>
                 </TableRow>
               ))}

@@ -1,6 +1,6 @@
 # 배드민턴 예약 관리 시스템 — 배포 문서
 
-기준: `decisions.md` D-09(배포 방식), D-10(전화번호 암호화), D-11(관리자 비밀번호 해시), D-12(문서 분리 사유)
+기준: `decisions.md` D-09(배포 방식), D-10(전화번호 암호화), D-11(관리자 비밀번호 해시), D-12(문서 분리 사유), D-27(클럽데이 자동 생성 크론)
 이 문서는 호스팅/배포 인프라, 환경변수, 마이그레이션 운영, 플랫폼별 주의사항을 다룬다. 코드/도메인 아키텍처(디렉토리 구조, 서비스 계층, 스키마, API, 트랜잭션 등)는 `architecture.md`를 참고.
 
 배포 대상은 프로젝트 상황에 따라 이후 바뀔 수 있어(D-12), `architecture.md`와 분리된 이 문서에서 독립적으로 관리한다. 배포 방식이 바뀌면 이 문서만 갱신하면 되고, 코드 아키텍처 문서는 건드릴 필요가 없다.
@@ -24,6 +24,7 @@
 | `TURSO_DATABASE_URL` | Turso DB 연결 URL |
 | `TURSO_AUTH_TOKEN` | Turso 인증 토큰 |
 | `PII_SECRET_KEY` | 전화번호 `phoneHash`/`phoneEncrypted` 계산용 마스터 키(D-10) |
+| `CRON_SECRET` | 클럽데이 자동 생성 크론 라우트(`/api/cron/club-days`) 인증용 공유 비밀키(D-27). Vercel이 크론 호출 시 `Authorization: Bearer {CRON_SECRET}` 헤더로 자동 전송한다 — 별도로 헤더를 수동 설정할 필요 없음 |
 
 `.env` 파일은 로컬 개발용으로만 사용하고, 실제 값은 Vercel 대시보드에 등록한다.
 
@@ -31,6 +32,31 @@
 1. 원하는 관리자 비밀번호를 `ADMIN_PASSWORD`에 그대로 등록한다.
 2. Turso CLI로 데이터베이스를 생성하고 `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN`을 발급받아 등록한다.
 3. `PII_SECRET_KEY`를 안전하게 생성(예: `openssl rand -base64 32`)해 등록한다.
+4. `CRON_SECRET`을 16자 이상의 임의 문자열로 생성(예: `openssl rand -hex 32`)해 등록한다. 개행/특수문자가 섞이지 않도록 주의한다(Authorization 헤더 값으로 그대로 쓰이기 때문).
+
+---
+
+## 1-1. 클럽데이 자동 생성 크론 설정 (D-27)
+
+**`vercel.json`** (프로젝트 루트, `badminton-app/vercel.json`)
+
+```json
+{
+  "crons": [
+    {
+      "path": "/api/cron/club-days",
+      "schedule": "0 11 * * *"
+    }
+  ]
+}
+```
+
+- Vercel Cron의 `schedule`은 항상 UTC 기준이다. `0 11 * * *`(매일 UTC 11:00)는 NZDT(서머타임, UTC+13) 기간에는 뉴질랜드 자정(00:00) 정각과 일치하고, NZST(UTC+12) 기간에는 뉴질랜드 23:00(자정 1시간 전)에 실행된다 — 서머타임 전환에 따라 로컬 실행 시각이 최대 1시간 어긋난다.
+- 여기에 더해 Vercel **Hobby 플랜은 크론을 하루 1회만 등록할 수 있고, 지정한 시간(hour) 내에서 최대 ±59분까지 실행 시각이 흔들릴 수 있다**([Vercel 공식 문서](https://vercel.com/docs/cron-jobs/manage-cron-jobs)). 두 오차를 합치면 실제 실행 시각이 뉴질랜드 자정 기준 최대 약 2시간 가까이 흔들릴 수 있다.
+- 이 오차는 감수하기로 확정했다(D-27). `generateTodaysClubDays()`는 "정확히 자정에 실행된다"고 가정하지 않고, 실행되는 순간의 Pacific/Auckland 기준 날짜를 다시 계산해 그 날짜 기준으로 생성하므로 실행 시각이 흔들려도 정확한 날짜에 대해 생성 여부를 판단한다.
+- Vercel Cron은 등록된 경로에 **GET** 요청을 보낸다. `/api/cron/club-days`는 `GET`으로 구현한다.
+- Vercel이 이 요청에 `Authorization: Bearer {CRON_SECRET}` 헤더를 자동으로 실어 보내므로, 별도의 Vercel 설정 없이 라우트 핸들러에서 `CRON_SECRET` 환경변수와 비교하기만 하면 된다(architecture.md 5-1장 참고).
+- Turso 쓰기 쿼터(월 1천만 행)에 미치는 영향은 무시할 수 있는 수준이다(하루 최대 활성 패턴 수만큼만 쓰기 발생, 동호회 규모에서는 하루 몇 건).
 
 ---
 

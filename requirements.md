@@ -255,6 +255,7 @@ CANCELLED
 - 연 멤버 등록/수정/비활성화
 - 월 멤버 등록/수정/비활성화
 - 월 멤버 자동 배정 실행
+- 클럽데이 패턴 등록/수정/비활성화/삭제 (25번 참고)
 
 ## 16. 관리자 대시보드 (경고 지표 개정, decisions.md D-16)
 
@@ -301,6 +302,27 @@ MonthlyMember {
   @@unique([annualMemberId, year, month, dayOfWeek])
 }
 
+ClubDayPattern {
+  id
+  name                     // optional, 관리자 식별용 자유 텍스트
+  dayOfWeek                // 0(일)~6(토)
+  label                    // optional, 생성되는 BookingDay.label에 그대로 복사
+  startTime                // "HH:mm"
+  endTime                  // "HH:mm", startTime보다 늦어야 함
+  location
+  dutyPerson
+  totalSlots
+  annualSlots
+  casualSlots
+  slotMode                 // SEPARATED | COMBINED
+  autoAssignMonthlyMembers // boolean, 기본값 true (decisions.md D-30)
+  isActive                 // boolean, 기본값 true — 크론 생성 대상 여부
+  deletedAt                // nullable, "삭제" 액션 시각. null이 아니면 목록에서 숨김(decisions.md D-29)
+  createdAt
+  updatedAt
+  // 요일당 여러 패턴 등록 가능 (unique 제약 없음)
+}
+
 BookingDay {
   id
   date
@@ -315,6 +337,9 @@ BookingDay {
   casualSlots
   slotMode        // SEPARATED | COMBINED
   isOpen
+  clubDayPatternId // nullable, ClubDayPattern을 가리키는 "약한 참조"(FK 제약 없음, decisions.md D-28).
+                    // null이 아니면 클럽데이(크론 자동 생성), null이면 관리자가 수동 생성한 일반 예약일.
+                    // 별도의 isClubDay boolean 필드는 두지 않는다.
   createdAt
   updatedAt
   // date에 unique 제약 없음 (다중 세션 허용)
@@ -441,6 +466,7 @@ applyMonthlyMembersToBookingDay(bookingDayId)
 
 **Backend**
 - Next.js Route Handlers
+- 스케줄러: Vercel Cron — 클럽데이 자동 생성 전용으로 매일 1회 실행된다(decisions.md D-27). 이 프로젝트의 기존 원칙("별도 백그라운드 인프라 없이 요청 시점에 계산", 예: `isBookingDayEnded`, 대시보드 집계)에 대한 예외이며, 실제로 정해진 시각에 새 레코드를 써야 하는 이번 요구에만 한정해서 적용한다.
 
 **Database**
 - Turso (libSQL, SQLite 호환 서버리스 DB). 로컬 SQLite 파일 대신 사용한다 (확정, decisions.md D-09 참고). 스키마/쿼리 문법은 SQLite와 동일하며 Prisma의 sqlite 커넥터를 그대로 사용한다.
@@ -499,3 +525,54 @@ applyMonthlyMembersToBookingDay(bookingDayId)
 - 관리자 화면(`/admin/**`)은 이번 범위에서 제외하며 한글만 유지한다.
 - 화면 우측 상단의 언어 전환 버튼으로 즉시 전환하며, 선택한 언어는 브라우저에 저장되어 다음 방문 시에도 유지된다.
 - 예약일의 `label`(세션 라벨)처럼 관리자가 직접 입력한 자유 텍스트는 번역 대상이 아니다(UI 문구가 아닌 데이터이므로 입력된 그대로 표시).
+
+## 25. 클럽데이 자동 생성 (decisions.md D-27~D-30)
+
+### 25.1 개념
+
+"클럽데이"는 반복 패턴(`ClubDayPattern`)으로부터 크론이 매일 자동으로 생성하는 예약일이다. 관리자가 매번 수동으로 만드는 기존 1회성 예약일과 구분되며, `BookingDay.clubDayPatternId`가 채워져 있으면 클럽데이, `null`이면 일반 예약일이다(별도 boolean 필드 없음, decisions.md D-28).
+
+### 25.2 클럽데이 패턴 관리
+
+관리자는 별도 화면(`/admin/club-day-patterns`)에서 반복 패턴을 등록/수정/비활성화/삭제할 수 있다. 요일별로 패턴을 여러 개 등록할 수 있다(예: 월요일 A체육관 패턴 + 월요일 B체육관 패턴).
+
+**클럽데이 패턴 정보**
+- 이름(`name`, optional) — 관리자 식별용 자유 텍스트(예: "월요일 A체육관 저녁")
+- 요일(`dayOfWeek`) — 0(일)~6(토)
+- 세션 라벨(`label`, optional) — 생성되는 예약일의 `label`에 그대로 복사된다
+- 시작 시간(`startTime`) / 종료 시간(`endTime`) — "HH:mm", 예약일과 동일한 검증 규칙(종료가 시작보다 늦어야 함, 3번 참고)
+- 장소(`location`) / 듀티 담당자(`dutyPerson`)
+- 전체/연/캐주얼 슬롯 수, 슬롯 정책(`slotMode`) — 예약일 생성과 동일한 검증 규칙 적용(3번 참고)
+- 월 멤버 자동 배정 여부(`autoAssignMonthlyMembers`, 기본값 true) — 이 패턴에서 파생되는 모든 클럽데이 회차에 공통 적용된다(decisions.md D-30). 회차마다 다시 묻지 않는다.
+- 활성 여부(`isActive`)
+- 삭제 여부(`deletedAt`) — UI의 "삭제" 액션 시각을 기록. `null`이면 목록에 노출, 값이 있으면 목록에서 숨김(decisions.md D-29)
+
+**"비활성화"와 "삭제" (decisions.md D-29)**
+- 비활성화: `isActive=false`로 토글. 목록에는 "비활성" 배지로 계속 표시되고, 재활성화 가능. 크론은 `isActive=true`인 패턴만 생성 대상으로 삼는다.
+- 삭제: `deletedAt`에 시각을 기록(`isActive`도 함께 false 처리). 목록에서 완전히 사라지며 UI에서 되돌릴 방법은 없다. 단, DB row 자체는 지우지 않는다(하드 삭제 아님) — 과거 클럽데이가 참조하는 `clubDayPatternId`가 가리키는 대상이 갑자기 사라지지 않도록 하기 위함이다.
+
+두 액션 모두 물리적으로 레코드를 삭제하지 않는다는 점에서 `AnnualMember`(D-07)와 같지만, `MonthlyMember`(D-26)처럼 "비활성화"와 "삭제"를 UI에서 별개 버튼으로 제공한다는 점은 다르다.
+
+### 25.3 생성 + 공개 로직 (크론)
+
+매일 1회(자정 근처) 실행되는 크론이, 실행 시점의 Pacific/Auckland 기준 "오늘" 날짜와 요일을 계산해 그 요일과 일치하는 활성 패턴(`isActive=true`, `deletedAt=null`)을 모두 찾는다. 각 패턴에 대해:
+
+1. 이미 오늘 날짜로 생성된 적이 있는지 확인한다(`clubDayPatternId` + `date` 조합, decisions.md D-28). 이미 있으면 건너뛴다(멱등성 보장 — 크론이 하루에 두 번 이상 실행돼도 중복 생성되지 않는다).
+2. 없으면 패턴의 필드값을 그대로 복사해 `BookingDay`를 생성한다. 이때 `isOpen`은 항상 `true`다 — "생성"과 "공개"가 한 스텝으로 동시에 일어난다(decisions.md D-27, "미리 생성해두고 나중에 공개 전환"하는 방식이 아니다).
+3. 패턴의 `autoAssignMonthlyMembers`가 `true`면, 생성 직후 같은 트랜잭션 안에서 `applyMonthlyMembersToBookingDay`를 실행한다(19번 참고).
+
+패턴 하나의 생성 처리는 하나의 DB 트랜잭션으로 묶이며, 한 패턴의 처리가 실패해도 다른 패턴의 처리에는 영향을 주지 않는다(20번 동시성 처리 원칙과 동일).
+
+### 25.4 휴무/예외 처리
+
+특정 날짜만 쉬고 싶으면, 그날 크론이 생성한 `BookingDay`를 기존 "예약일 삭제" 기능(3번, decisions.md D-17)으로 지우면 된다. 별도의 "이번 회차만 건너뛰기" 기능은 제공하지 않는다.
+
+### 25.5 패턴 수정/중단의 영향 범위
+
+클럽데이는 "미리 생성해 둔 미래 회차"라는 개념이 없다(매일 그날치만 생성). 따라서 패턴을 수정하거나 비활성화해도 정리해야 할 기존 생성분이 없다.
+- 패턴을 수정하면 다음 크론 실행부터 새 설정이 반영된다. 이미 생성된 과거 `BookingDay`는 생성 시점의 값을 그대로 유지한다(패턴과 실시간으로 동기화되지 않는다).
+- 패턴을 비활성화하면 다음 크론 실행부터 그 패턴으로는 더 이상 생성되지 않는다.
+
+### 25.6 크론 라우트 인증
+
+크론 라우트(`GET /api/cron/club-days`)는 관리자 세션 미들웨어가 보호하는 `/api/admin/*` 바깥에 위치하며, 대신 Vercel이 크론 호출 시 자동으로 실어 보내는 `Authorization: Bearer {CRON_SECRET}` 헤더를 라우트 핸들러 내부에서 직접 검증한다(decisions.md D-27). 헤더가 없거나 환경변수 `CRON_SECRET`과 일치하지 않으면 401로 거부한다.

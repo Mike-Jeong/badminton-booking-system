@@ -126,6 +126,24 @@
 
 ---
 
+## 10-1. 클럽데이 자동 생성 (decisions.md D-27~D-30, requirements.md §25)
+
+- [x] 클럽데이 패턴 관리 화면(`/admin/club-day-patterns`)에서 요일/시간/장소/듀티담당자/슬롯/슬롯정책/월멤버자동배정여부를 입력해 패턴을 등록할 수 있다.
+- [x] 같은 요일에 패턴을 여러 개 등록할 수 있다(예: 월요일 A체육관 패턴 + 월요일 B체육관 패턴).
+- [x] 크론(`GET /api/cron/club-days`)이 실행되면, 실행 시점의 Pacific/Auckland 기준 오늘 요일과 일치하는 활성 패턴마다 예약일이 생성되고 `isOpen=true`로 즉시 공개된다("생성"과 "공개"가 한 스텝, decisions.md D-27).
+- [x] 크론이 같은 날짜에 대해 두 번 이상 호출돼도(재시도, 재배포 등) 같은 패턴으로 중복 생성되지 않는다(멱등성, decisions.md D-28).
+- [x] 패턴의 `autoAssignMonthlyMembers`가 켜져 있으면, 클럽데이 생성 직후 연/월/요일이 일치하는 활성 월 멤버가 자동으로 배정된다(기존 `applyMonthlyMembersToBookingDay` 로직 재사용 확인, requirements.md 6·19번).
+- [x] 패턴의 `autoAssignMonthlyMembers`가 꺼져 있으면, 클럽데이가 생성돼도 월 멤버가 자동 배정되지 않는다.
+- [x] `Authorization` 헤더 없이, 또는 `CRON_SECRET`과 일치하지 않는 값으로 `/api/cron/club-days`를 호출하면 401로 거부된다.
+- [x] 크론으로 생성된 예약일은 관리자 화면(목록/상세)에서 "클럽데이" 배지로 구분 표시된다(`clubDayPatternId`가 있는 예약일).
+- [x] 패턴을 "비활성화"하면 목록에는 "비활성" 배지로 계속 남고, 이후 크론 생성 대상에서 제외된다. 다시 "활성화"하면 크론 생성 대상에 복귀한다.
+- [x] 패턴을 "삭제"하면 목록에서 즉시 사라진다. DB(Prisma Studio 등으로 직접 확인)에는 해당 row가 물리적으로 남아 있다(과거 클럽데이의 `clubDayPatternId`가 가리키는 대상이 깨지지 않음, decisions.md D-29).
+- [x] 특정 날짜만 쉬고 싶을 때, 그날 크론이 생성한 예약일을 기존 "예약일 삭제" 기능으로 지우면 이후 신청/조회에 노출되지 않는다. 별도의 "이번 회차만 건너뛰기" 기능은 없다(UI에도 해당 기능 없음을 화면에서 확인).
+- [x] 패턴을 수정해도 이미 생성된 과거 클럽데이(BookingDay)의 값은 그대로 유지되고, 다음 크론 실행부터만 새 설정이 반영된다.
+- [x] 패턴 하나의 생성 처리 중 오류가 발생해도, 같은 실행에서 다른 패턴의 생성 결과에는 영향을 주지 않는다(패턴 단위 트랜잭션 격리) — `clubDayGenerationService.ts`가 패턴마다 개별 `try/catch` + 개별 `$transaction`으로 감싸는 구조를 코드 리뷰로 확인. 단, 블랙박스(curl) 방식으로 실제 예외를 주입해 살아있는 실패 케이스를 재현하지는 못했다(시도한 방법들 — phoneEncrypted 손상, AnnualMember 하드 삭제로 인한 dangling FK — 모두 이 경로에서 안전하게 처리됨, 상세는 QA 보고 참고). 실제 예외 재현은 단위 테스트 추가를 권장.
+
+---
+
 ## 11. 비기능 테스트
 
 ### 동시성 테스트
@@ -189,6 +207,7 @@
 - [ ] 세션 서명용 비밀키(`ADMIN_SESSION_SECRET`)가 설정되어 있고 `ADMIN_PASSWORD`와 별도 값으로 관리된다.
 - [ ] `PII_SECRET_KEY`가 Vercel 프로덕션 환경변수에 설정되어 있다(전화번호 암/복호화용, 누락 시 전화번호 저장 자체가 실패해야 함).
 - [ ] `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`이 Vercel 프로덕션 환경변수에 설정되어 있고, Turso 대시보드에서 해당 DB가 정상 상태인지 확인한다.
+- [ ] `CRON_SECRET`이 Vercel 프로덕션 환경변수에 설정되어 있고, `vercel.json`의 크론 설정이 Vercel 프로젝트의 Cron Jobs 대시보드에 정상 등록되어 있는지 확인한다(decisions.md D-27).
 - [ ] 배포 전 스키마 변경사항이 `prisma migrate diff` + Turso CLI로 실제 프로덕션 DB에 반영되어 있다(로컬 마이그레이션과 원격 DB 스키마가 어긋나지 않는지).
 - [ ] Vercel 배포(프로덕션 브랜치 push 또는 수동 배포)가 정상적으로 완료되고, 빌드 로그에 에러가 없다.
 - [ ] Vercel Hobby 플랜의 비상업적 이용 조건에 부합하는지 재확인한다(회비 결제·광고 등 상업적 요소 추가 시 플랜 재검토 필요).

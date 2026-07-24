@@ -26,12 +26,15 @@ app/
     booking-days/[id]/page.tsx        # 예약자 목록(전체 정보) + 상태변경 + 자동배정 버튼
     annual-members/page.tsx
     monthly-members/page.tsx
+    club-day-patterns/page.tsx        # 클럽데이 패턴 목록/등록/수정/비활성화/삭제 (신규, requirements.md 25번)
   api/
     booking-days/route.ts             # GET (공개 목록)
     booking-days/[id]/route.ts        # GET (공개 상세)
     bookings/route.ts                 # POST (사용자 예약 신청)
     bookings/lookup/route.ts          # POST (전화번호로 조회)
     bookings/[id]/cancel/route.ts     # POST (사용자 취소)
+    cron/club-days/route.ts           # GET (신규, Vercel Cron 전용, CRON_SECRET 헤더로 보호. /api/admin 바깥이라
+                                       # 관리자 세션 미들웨어 대상이 아님 — 이 라우트 자체에서 인증 검증)
     admin/login/route.ts              # POST
     admin/logout/route.ts             # POST
     admin/booking-days/route.ts       # GET, POST
@@ -46,6 +49,8 @@ app/
     admin/monthly-members/route.ts    # GET, POST
     admin/monthly-members/[id]/route.ts # PATCH, DELETE
     admin/monthly-members/apply/route.ts # POST (연/월[/요일] 일괄 자동배정)
+    admin/club-day-patterns/route.ts       # GET, POST (신규)
+    admin/club-day-patterns/[id]/route.ts  # PATCH(수정/비활성화·활성화), DELETE(소프트 삭제) (신규)
     admin/dashboard/route.ts          # GET
   layout.tsx
   globals.css
@@ -61,12 +66,18 @@ lib/
     annualMemberService.ts   # 연 멤버 CRUD, determineMemberType
     monthlyMemberService.ts  # 월 멤버 CRUD, applyMonthlyMembersToBookingDay/ToMonth
     dashboardService.ts      # 대시보드 집계
+    clubDayPatternService.ts     # 클럽데이 패턴 CRUD (신규, requirements.md 25번)
+    clubDayGenerationService.ts  # generateTodaysClubDays — 크론이 호출하는 생성 로직 (신규)
+  validation/
+    bookingSlots.ts             # assertTimeRange/validateSlots — bookingDayService.ts에서 추출해 공유
+                                 # (신규, clubDayPatternService도 동일 검증 규칙을 재사용하기 위함)
   normalize.ts                # normalizeName, normalizePhone
   timezone.ts                  # Pacific/Auckland 관련 유틸(오늘 날짜, dayOfWeek 계산)
   security/
     phoneCrypto.ts             # hashPhone(HMAC-SHA256), encryptPhone/decryptPhone(AES-256-GCM), PII_SECRET_KEY 기반
   auth/
     session.ts                # 쿠키 서명(sign)/검증(verify), payload 정의
+    cronAuth.ts                # assertCronSecret(req) — CRON_SECRET Authorization 헤더 검증 (신규)
   errors.ts                    # AppError 및 하위 에러 클래스, 응답 포맷터
   http.ts                      # route handler 공통 wrapper(try/catch → 응답 포맷)
 
@@ -82,7 +93,9 @@ prisma/
   migrations/
 
 .env                            # ADMIN_PASSWORD, ADMIN_SESSION_SECRET,
-                                 # TURSO_DATABASE_URL, TURSO_AUTH_TOKEN, PII_SECRET_KEY
+                                 # TURSO_DATABASE_URL, TURSO_AUTH_TOKEN, PII_SECRET_KEY, CRON_SECRET
+
+vercel.json                    # crons 설정 (신규, deployment.md 참고)
 ```
 
 배포는 Vercel(Hobby, 무료) + Turso(무료 티어)를 사용한다(확정, decisions.md D-09). Docker/자체 서버 배포는 사용하지 않으므로 `Dockerfile`/`docker-compose.yml`은 두지 않는다. 자세한 내용은 `deployment.md` 참고.
@@ -126,6 +139,24 @@ prisma/
 - `applyMonthlyMembersToBookingDay(bookingDayId)`
 - 비활성화(`isActive=false`)는 `updateMonthlyMember`로, 완전 삭제(하드 삭제)는 `deleteMonthlyMember`로 별도 제공한다(decisions.md D-26 — MonthlyMember는 Booking 등 다른 레코드가 FK로 참조하지 않아, AnnualMember와 달리 D-07의 "하드 삭제 없음" 원칙을 적용할 이유가 없다). 특정 멤버를 특정 요일 자동 배정에서 영구 제외하고 싶을 때는 비활성화로 처리한다(D-08).
 - `createMonthlyMembersBulk`는 여러 요일을 한 번에 등록할 때 쓰며, 요일별로 `createMonthlyMember`를 호출해 일부 요일이 중복이어도 나머지는 정상 등록되는 부분 성공을 허용한다(decisions.md D-25).
+
+### ClubDayPatternService (`lib/services/clubDayPatternService.ts`, 신규)
+- `createClubDayPattern(input)`: `dayOfWeek`(0~6) 검증, `lib/validation/bookingSlots.ts`의 `assertTimeRange`/`validateSlots`를 재사용해 시간·슬롯 검증(`bookingDayService.createBookingDay`와 동일 규칙). `isActive` 기본값 `true`, `autoAssignMonthlyMembers` 기본값 `true`(decisions.md D-30).
+- `updateClubDayPattern(id, input)`: 전달된 필드만 갱신(부분 업데이트). `isActive` 토글도 이 함수로 처리한다(별도 activate/deactivate 함수 없음, `updateMonthlyMember`와 동일 패턴).
+- `deleteClubDayPattern(id)`: **물리적 삭제 없음**(decisions.md D-29). `deletedAt = new Date()`, `isActive = false`를 저장한다. `prisma.clubDayPattern.delete(...)`는 호출하지 않는다.
+- `listClubDayPatterns()`: 기본적으로 `deletedAt: null`인 패턴만 반환(삭제된 패턴은 목록에서 제외). 삭제된 패턴을 다시 조회하는 옵션은 이번 범위에 포함하지 않는다(YAGNI, 필요 시 추후 추가).
+- 검증 로직(시간 범위, 슬롯 합)을 중복 구현하지 않기 위해, `bookingDayService.ts`에 있던 private 함수 `assertTimeRange`/`validateSlots`를 `lib/validation/bookingSlots.ts`로 추출해 `export`하고, `bookingDayService.ts`와 `clubDayPatternService.ts` 양쪽에서 import해 사용하도록 리팩터링한다.
+
+### ClubDayGenerationService (`lib/services/clubDayGenerationService.ts`, 신규)
+- `generateTodaysClubDays(now: Date = new Date())`: 크론(`GET /api/cron/club-days`)이 호출하는 핵심 함수.
+  1. `getDayOfWeekInTimeZone(now)`와 `formatDateOnlyInTimeZone(now)`(둘 다 `lib/timezone.ts`에 이미 존재, `Date` 인자를 받으므로 그대로 재사용 가능)로 실행 시점의 Pacific/Auckland 기준 오늘 날짜/요일을 계산한다.
+  2. `prisma.clubDayPattern.findMany({ where: { isActive: true, deletedAt: null, dayOfWeek: todayDayOfWeek } })`로 오늘 생성 대상 패턴을 조회한다.
+  3. 패턴마다 **개별 `prisma.$transaction`**을 열어(패턴 간 격리, 7장 트랜잭션 원칙과 동일) 다음을 수행한다:
+     - `tx.bookingDay.findFirst({ where: { clubDayPatternId: pattern.id, date: todayUtcMidnight } })`로 이미 생성됐는지 확인(decisions.md D-28). 있으면 `{ status: "skipped" }`로 종료.
+     - 없으면 패턴의 필드값을 그대로 복사해 `tx.bookingDay.create(...)` — `isOpen: true` 고정, `clubDayPatternId: pattern.id` 설정. 여기서는 `bookingDayService.createBookingDay`를 재사용하지 않는다(그 함수는 트랜잭션 인자를 받지 않아 이 단계의 원자성 요구와 맞지 않음). 패턴 필드는 이미 등록/수정 시점에 검증됐으므로 생성 시점에 재검증하지 않는다.
+     - `pattern.autoAssignMonthlyMembers`가 `true`면 `applyMonthlyMembersToBookingDay(bookingDay.id, tx)`를 같은 트랜잭션에서 호출(기존 함수가 이미 `tx` 인자를 지원하므로 그대로 재사용).
+     - `{ status: "created", bookingDayId }`로 종료.
+  4. 패턴별 결과 배열(`{ patternId, status: "created" | "skipped" | "failed", bookingDayId?, error? }`)을 반환한다. 한 패턴 처리 중 예외가 발생해도 `try/catch`로 감싸 `status: "failed"`로 기록하고 다음 패턴 처리를 계속한다(한 패턴의 실패가 다른 패턴에 영향을 주지 않음).
 
 ### DashboardService (`lib/services/dashboardService.ts`)
 - `getTodaySummary()` — Pacific/Auckland 기준 "오늘"
@@ -209,6 +240,29 @@ model MonthlyMember {
   @@index([year, month, dayOfWeek])
 }
 
+model ClubDayPattern {
+  id                       String   @id @default(cuid())
+  name                     String?  // 관리자 식별용, 예: "월요일 A체육관 저녁"
+  dayOfWeek                Int      // 0(일)~6(토). 요일당 여러 패턴 등록 가능 (unique 제약 없음)
+  label                    String?  // 생성되는 BookingDay.label에 그대로 복사
+  startTime                String   // "HH:mm"
+  endTime                  String   // "HH:mm", startTime보다 늦어야 함
+  location                 String
+  dutyPerson               String
+  totalSlots               Int
+  annualSlots              Int      @default(0)
+  casualSlots              Int      @default(0)
+  slotMode                 SlotMode
+  autoAssignMonthlyMembers Boolean  @default(true)  // decisions.md D-30
+  isActive                 Boolean  @default(true)  // 크론 생성 대상 여부(토글 가능)
+  deletedAt                DateTime?                // "삭제" 액션 시각. null이 아니면 목록에서 숨김(decisions.md D-29).
+                                                      // 물리적 삭제(prisma...delete)는 어떤 경우에도 하지 않는다.
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  @@index([dayOfWeek, isActive])
+}
+
 model BookingDay {
   id          String   @id @default(cuid())
   date        DateTime // 자정 00:00 Pacific/Auckland 기준으로 정규화해 저장
@@ -223,13 +277,19 @@ model BookingDay {
   casualSlots Int      @default(0)
   slotMode    SlotMode
   isOpen      Boolean  @default(true)
+  clubDayPatternId String?  // ClubDayPattern.id를 가리키는 "약한 참조" — 의도적으로 Prisma @relation을
+                             // 걸지 않는다(FK 제약 없음, decisions.md D-28). null이 아니면 클럽데이(크론
+                             // 자동 생성), null이면 관리자가 수동 생성한 일반 예약일. 별도 isClubDay 컬럼 없음.
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   bookings    Booking[]
 
   // date에 unique 제약 없음 (다중 세션 허용, 확정사항)
+  // clubDayPatternId + date 조합에도 DB unique 제약을 두지 않는다 — 중복 생성 방지는
+  // ClubDayGenerationService의 트랜잭션 내 조회로 처리한다(decisions.md D-28, 서비스 레이어 체크).
   @@index([date])
+  @@index([clubDayPatternId])
 }
 
 model Booking {
@@ -300,9 +360,19 @@ model Booking {
 | POST | `/api/admin/monthly-members` | 월 멤버 등록(`dayOfWeeks` 배열로 여러 요일 한 번에 등록, decisions.md D-25) |
 | PATCH | `/api/admin/monthly-members/[id]` | 월 멤버 수정(연/월/요일/메모, D-21) 및 활성/비활성 토글 |
 | DELETE | `/api/admin/monthly-members/[id]` | 월 멤버 완전 삭제(하드 삭제, decisions.md D-26) |
+| GET | `/api/admin/club-day-patterns` | 클럽데이 패턴 목록(삭제되지 않은 것만, decisions.md D-29) |
+| POST | `/api/admin/club-day-patterns` | 클럽데이 패턴 등록 |
+| PATCH | `/api/admin/club-day-patterns/[id]` | 패턴 수정 및 활성/비활성 토글(`isActive`) |
+| DELETE | `/api/admin/club-day-patterns/[id]` | 패턴 소프트 삭제(`deletedAt` 기록, 물리적 삭제 아님, decisions.md D-29) |
 | GET | `/api/admin/dashboard` | 대시보드 요약 데이터 |
 
 예약자 목록/연 멤버 목록을 반환하는 GET 라우트는 DB의 `phoneEncrypted`를 서버(route handler)에서 복호화해 평문 전화번호로 응답에 담는다. 클라이언트로는 항상 복호화된 평문이 내려가며, `phoneHash`/`phoneEncrypted` 원값은 API 응답에 노출하지 않는다.
+
+### 크론용 (`/api/admin/*` 미들웨어 보호 대상이 아님, 라우트 자체에서 `CRON_SECRET` 검증)
+
+| Method | Path | 설명 |
+|---|---|---|
+| GET | `/api/cron/club-days` | Vercel Cron이 매일 1회 호출. `assertCronSecret`으로 `Authorization: Bearer {CRON_SECRET}` 헤더 검증 후 `generateTodaysClubDays()` 실행(decisions.md D-27) |
 
 ---
 
@@ -316,6 +386,13 @@ model Booking {
 - 검증 로직(`lib/auth/session.ts`)은 Edge Runtime에서도 동작해야 하므로 Node의 `crypto` 대신 Web Crypto API(`crypto.subtle`)로 구현해 `middleware.ts`와 route handler 양쪽에서 공유한다.
 - `middleware.ts`: `/admin/:path*`(단, `/admin/login` 제외)와 `/api/admin/:path*`(단, `/api/admin/login` 제외)에 매칭되는 요청에서 쿠키를 검증한다. 실패 시 페이지 요청은 `/admin/login`으로 리다이렉트, API 요청은 `401 Unauthorized` JSON 응답을 반환한다.
 - Route handler 내부에서도 서비스 호출 전 세션을 재검증한다(미들웨어 우회 가능성에 대한 방어적 이중 체크, MVP 수준에서는 선택적이지만 권장).
+
+### 5-1. 크론 인증 방식 (`/api/cron/club-days`, decisions.md D-27)
+
+- `/api/cron/club-days`는 `middleware.ts`의 매처(`/admin/:path*`, `/api/admin/:path*`)에 포함되지 않으므로 관리자 세션 검증을 거치지 않는다. 대신 이 라우트 핸들러 내부에서 직접 인증을 검증한다.
+- Vercel은 크론이 등록된 경로를 호출할 때, 프로젝트에 설정된 `CRON_SECRET` 환경변수 값을 `Authorization: Bearer {CRON_SECRET}` 헤더로 자동으로 실어 보낸다(Vercel 공식 동작).
+- `lib/auth/cronAuth.ts`의 `assertCronSecret(req: NextRequest)`가 요청의 `authorization` 헤더를 `` `Bearer ${process.env.CRON_SECRET}` ``와 비교한다. `CRON_SECRET` 환경변수가 설정되어 있지 않으면 즉시 에러(설정 누락을 조용히 통과시키지 않음), 헤더가 없거나 값이 다르면 `AdminAuthError`(401)를 던진다. 새 에러 클래스를 추가하지 않고 기존 `AdminAuthError`를 재사용한다(이 프로젝트의 "필요한 만큼만 에러 클래스를 둔다" 원칙, 8장 참고).
+- 이 라우트는 관리자 화면에서 호출되지 않으므로(오직 Vercel Cron만 호출), `verifySessionFromRequest`(관리자 세션 쿠키 검증)는 사용하지 않는다.
 
 ---
 
@@ -351,6 +428,7 @@ model Booking {
 | 슬롯 변경 | `BookingDayService.updateBookingDay` | BookingDay 업데이트 + (증가 시) `promoteWaitingBookings` 호출까지 하나의 트랜잭션. 감소 시에는 업데이트만 수행(강제 하향 없음) |
 | 월 멤버 자동 배정 | `MonthlyMemberService.applyMonthlyMembersToBookingDay` | 대상 월 멤버 조회 + 중복 예약 확인 + 예약 insert(들)를 BookingDay 단위로 하나의 트랜잭션 |
 | 대기자 자동 승격 | `BookingService.promoteWaitingBookings` | 남은 슬롯 계산 + 대상 대기자 목록(FIFO 정렬) 조회 + 순차 status 업데이트. 단독 호출 시에도 자체 트랜잭션으로 감싸고, 위 취소/슬롯변경 흐름에서 호출될 때는 상위 트랜잭션에 참여(같은 `tx` 인스턴스 전달) |
+| 클럽데이 생성(신규) | `ClubDayGenerationService.generateTodaysClubDays` | 패턴별로 개별 트랜잭션 — 중복 생성 확인(`clubDayPatternId`+`date`) + `BookingDay` insert + (조건부) `applyMonthlyMembersToBookingDay`까지 패턴 단위로 하나의 트랜잭션. 한 패턴의 실패가 다른 패턴 처리에 영향을 주지 않는다 |
 
 공통 원칙
 - 모든 서비스 함수는 Prisma 트랜잭션 클라이언트(`tx`)를 인자로 받을 수 있도록 설계해, 상위 트랜잭션에 참여(nested call)할 수 있게 한다.
