@@ -22,6 +22,9 @@ export default function AdminProtectedLayout({ children }: { children: React.Rea
             <Link href="/admin/monthly-members" className="text-sm font-semibold">
               월 멤버 관리
             </Link>
+            <Link href="/admin/club-day-patterns" className="text-sm font-semibold">
+              클럽데이 패턴 관리
+            </Link>
           </nav>
           <LogoutButton />
         </div>

@@ -66,6 +66,29 @@ model MonthlyMember {
   @@index([year, month, dayOfWeek])
 }
 
+model ClubDayPattern {
+  id                       String    @id @default(cuid())
+  name                     String?   // 관리자 식별용, 예: "월요일 A체육관 저녁"
+  dayOfWeek                Int       // 0(일)~6(토). 요일당 여러 패턴 등록 가능 (unique 제약 없음)
+  label                    String?   // 생성되는 BookingDay.label에 그대로 복사
+  startTime                String    // "HH:mm"
+  endTime                  String    // "HH:mm", startTime보다 늦어야 함
+  location                 String
+  dutyPerson               String
+  totalSlots               Int
+  annualSlots              Int       @default(0)
+  casualSlots              Int       @default(0)
+  slotMode                 SlotMode
+  autoAssignMonthlyMembers Boolean   @default(true) // decisions.md D-30
+  isActive                 Boolean   @default(true) // 크론 생성 대상 여부(토글 가능)
+  deletedAt                DateTime? // "삭제" 액션 시각. null이 아니면 목록에서 숨김(decisions.md D-29).
+                                      // 물리적 삭제(prisma...delete)는 어떤 경우에도 하지 않는다.
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  @@index([dayOfWeek, isActive])
+}
+
 model BookingDay {
   id          String   @id @default(cuid())
   date        DateTime // 자정 00:00 Pacific/Auckland 기준으로 정규화해 저장
@@ -80,13 +103,19 @@ model BookingDay {
   casualSlots Int      @default(0)
   slotMode    SlotMode
   isOpen      Boolean  @default(true)
+  clubDayPatternId String?  // ClubDayPattern.id를 가리키는 "약한 참조" — 의도적으로 Prisma @relation을
+                             // 걸지 않는다(FK 제약 없음, decisions.md D-28). null이 아니면 클럽데이(크론
+                             // 자동 생성), null이면 관리자가 수동 생성한 일반 예약일. 별도 isClubDay 컬럼 없음.
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   bookings    Booking[]
 
   // date에 unique 제약 없음 (다중 세션 허용, 확정사항)
+  // clubDayPatternId + date 조합에도 DB unique 제약을 두지 않는다 — 중복 생성 방지는
+  // ClubDayGenerationService의 트랜잭션 내 조회로 처리한다(decisions.md D-28, 서비스 레이어 체크).
   @@index([date])
+  @@index([clubDayPatternId])
 }
 
 model Booking {
