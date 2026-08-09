@@ -7,7 +7,7 @@ import type { SlotMode } from "@prisma/client";
 
 export const GET = withApiHandler(async (req: NextRequest) => {
   await verifySessionFromRequest(req);
-  const bookingDays = await listBookingDays();
+  const bookingDays = await listBookingDays({ sort: "desc" });
   return jsonOk(bookingDays);
 });
 
