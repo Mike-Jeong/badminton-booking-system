@@ -53,6 +53,11 @@ export interface BookingDayUpdateInput {
 
 export interface ListBookingDaysFilter {
   isOpen?: boolean;
+  /**
+   * 날짜 정렬 방향. 기본값 "asc"(공개 화면 등 기존 동작 유지).
+   * 관리자 예약일 목록은 최신(임박/미래) 세션을 위에서 바로 보기 위해 "desc"를 사용한다.
+   */
+  sort?: "asc" | "desc";
 }
 
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -257,11 +262,12 @@ export async function deleteBookingDay(id: string) {
 }
 
 export async function listBookingDays(filter: ListBookingDaysFilter = {}) {
+  const sort = filter.sort ?? "asc";
   return prisma.bookingDay.findMany({
     where: {
       isOpen: filter.isOpen,
     },
-    orderBy: [{ date: "asc" }, { createdAt: "asc" }],
+    orderBy: [{ date: sort }, { createdAt: sort }],
   });
 }
 

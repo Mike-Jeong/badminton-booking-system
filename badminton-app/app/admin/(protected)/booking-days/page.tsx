@@ -16,7 +16,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 export const dynamic = "force-dynamic";
 
 export default async function AdminBookingDaysPage() {
-  const bookingDays = await listBookingDays();
+  const bookingDays = await listBookingDays({ sort: "desc" });
 
   return (
     <div className="space-y-8">
