@@ -256,6 +256,7 @@ CANCELLED
 - 월 멤버 등록/수정/비활성화
 - 월 멤버 자동 배정 실행
 - 클럽데이 패턴 등록/수정/비활성화/삭제 (25번 참고)
+- 결제 증빙 대리 업로드 및 결제 확인/확인 취소 처리 (26번 참고)
 
 ## 16. 관리자 대시보드 (경고 지표 개정, decisions.md D-16)
 
@@ -356,9 +357,21 @@ Booking {
   matchedAnnualMemberId
   status            // WAITING | CONFIRMED | CANCELLED
   source            // USER | ADMIN | MONTHLY_MEMBER_AUTO
+  paymentConfirmed    // boolean, 기본 false. 결제 확인 처리 여부 (26번, decisions.md D-31)
+  paymentConfirmedAt  // nullable, paymentConfirmed=true로 바뀐 시각. 확인 취소 시 다시 null
   createdAt
   updatedAt
   cancelledAt
+}
+
+PaymentProof {
+  id
+  bookingId    // Booking과 1:1 (unique)
+  imageData    // base64 인코딩된 이미지 데이터 (decisions.md D-32, base64-in-Turso)
+  mimeType     // "image/jpeg" | "image/png" | "image/webp"
+  uploadedBy   // SELF | ADMIN
+  createdAt
+  updatedAt    // 재업로드(교체) 시 갱신
 }
 ```
 
@@ -432,6 +445,39 @@ promoteWaitingBookings(bookingDayId)
 - 남은 슬롯 계산
 - 대기자를 신청 순서대로 자동 확정
 - 분리 슬롯/통합 슬롯 정책 반영 (풀 간 교차 승격 없음)
+
+### isPaymentConfirmationRequired
+```ts
+isPaymentConfirmationRequired(booking, bookingDay)
+```
+- `booking.memberType`이 `CASUAL`이면(또는 `matchedAnnualMemberId`가 없으면) 항상 `true`
+- `ANNUAL`이면, 이 예약일의 (연도, 월, 요일)과 일치하는 활성 `MonthlyMember`가 `matchedAnnualMemberId`에 연결되어 있는지 조회 — 있으면 `false`(면제), 없으면 `true`(월 멤버로 미등록된 순수 연 멤버이거나 본인 등록 요일이 아닌 날)
+- 목록 조회(관리자 예약자 목록, 전화번호 조회)에서는 N+1 쿼리를 피하기 위해 여러 예약을 배치로 한 번에 판정한다(26번 참고)
+
+### getPaymentAmountDue
+```ts
+getPaymentAmountDue(memberType: MemberType, paymentConfirmationRequired: boolean): number
+```
+- 순수 함수. DB 조회 없음(26.7번 참고).
+- `paymentConfirmationRequired`가 `false`면 `0`.
+- `true`이고 `memberType === "CASUAL"`이면 `16`, `"ANNUAL"`이면 `13`(고정 상수).
+- `lookupBookingsByPhone`/`listBookingsForAdmin`이 각 예약 DTO에 `paymentAmountDue` 필드로 포함시켜 반환한다.
+
+### uploadPaymentProof
+```ts
+uploadPaymentProof(bookingId, file, uploadedBy: "SELF" | "ADMIN", phone?)
+```
+- `uploadedBy === "SELF"`이면 `phone`을 정규화 후 `phoneHash`로 변환해 `booking.phoneHash`와 일치할 때만 진행(취소 검증과 동일한 방식). `uploadedBy === "ADMIN"`이면 이 검증을 생략한다.
+- 대상 예약이 `CANCELLED` 상태면 거부한다. 예약일 종료 여부(`isBookingDayEnded`)는 검사하지 않는다 — 결제 증빙 업로드는 예약일 종료와 무관하게 항상 허용한다(26번 참고).
+- 파일 MIME 타입이 이미지(jpeg/png/webp)가 아니거나 2MB를 초과하면 거부한다.
+- 기존 `PaymentProof`가 있으면 교체(재업로드 허용), 없으면 새로 생성한다. 업로드 자체는 `paymentConfirmed` 상태를 변경하지 않는다.
+
+### setPaymentConfirmation
+```ts
+setPaymentConfirmation(bookingId, confirmed: boolean)
+```
+- 관리자 전용. `paymentConfirmed`와 `paymentConfirmedAt`(확인 시 현재 시각, 확인 취소 시 `null`)을 갱신한다.
+- 증빙 이미지 존재 여부와 무관하게 항상 허용한다(관리자가 대면으로 확인한 경우 등, decisions.md D-31).
 
 ### applyMonthlyMembersToBookingDay
 ```ts
@@ -576,3 +622,62 @@ applyMonthlyMembersToBookingDay(bookingDayId)
 ### 25.6 크론 라우트 인증
 
 크론 라우트(`GET /api/cron/club-days`)는 관리자 세션 미들웨어가 보호하는 `/api/admin/*` 바깥에 위치하며, 대신 Vercel이 크론 호출 시 자동으로 실어 보내는 `Authorization: Bearer {CRON_SECRET}` 헤더를 라우트 핸들러 내부에서 직접 검증한다(decisions.md D-27). 헤더가 없거나 환경변수 `CRON_SECRET`과 일치하지 않으면 401로 거부한다.
+
+## 26. 회원 결제 확인 (decisions.md D-31~D-32)
+
+### 26.1 목적
+
+예약된 회원이 실제로 입금(송금)했는지 관리자가 확인할 수 있어야 한다. 회원이 송금 스크린샷을 업로드하면 관리자가 보고 수동으로 "확인" 처리하는 방식이며, 체크인 기능(별도 브랜치, 이번 범위 아님)과는 완전히 독립적으로 동작한다 — 결제 확인 여부가 체크인의 게이트 조건이 되지 않는다.
+
+### 26.2 대상 범위 및 면제 규칙
+
+모든 예약일 유형(클럽데이 포함)의 모든 예약(`CONFIRMED`/`WAITING`, `CANCELLED` 제외)에 적용한다. 다만 **월 멤버가 본인이 등록된 요일에 참여하는 경우에만 면제**한다.
+
+- **캐주얼(`CASUAL`) 예약**: 항상 결제 확인 대상.
+- **연 멤버(`ANNUAL`) 예약 중, 그 예약일의 (연도, 월, 요일)과 일치하는 활성 `MonthlyMember`로 등록되어 있는 경우**: 면제.
+- **연 멤버(`ANNUAL`) 예약 중, 위 조건을 만족하지 않는 경우** (월 멤버로 아예 등록되지 않은 순수 연 멤버, 또는 월 멤버이지만 본인 등록 요일이 아닌 날 참여): 결제 확인 대상. 월 멤버 미등록 연 멤버는 면제받을 "본인 요일" 자체가 없으므로 항상 대상이라는 뜻이다(19번 `isPaymentConfirmationRequired` 참고).
+
+판정은 예약 생성 시점에 결과를 저장하는 것이 아니라, 조회 시점에 매번 계산한다(요청 시점 계산 우선 원칙). 월 멤버 등록/비활성화가 나중에 바뀌어도 과거 예약의 확인 필요 여부가 그 시점 기준으로 재계산된다.
+
+### 26.3 업로드 주체
+
+- **회원 셀프 업로드**: 공개 "내 예약 조회/취소" 화면(`CancelLookup`)에서 조회한 본인 예약(`CANCELLED` 제외) 행에 업로드 버튼을 제공한다. 업로드 시 조회에 사용한 전화번호로 `phoneHash` 검증을 거친다(취소와 동일한 방식).
+- **관리자 대리 업로드**: 관리자 예약 관리 화면(`AdminBookingsPanel`)에서 회원이 보여준 화면/사진을 관리자가 직접 첨부할 수 있다. 전화번호 검증은 필요 없다.
+- 둘 다 기존 증빙이 있으면 새 업로드로 교체한다(재업로드 허용, "반려 후 재요청" 같은 별도 플로우는 없음).
+- **예약일 종료 여부와 무관하게 항상 업로드를 허용한다** — 취소(14번, D-23)와 달리 결제 증빙은 세션이 끝난 뒤에도 사후에 남길 수 있어야 하므로 `isBookingDayEnded` 검사를 적용하지 않는다.
+
+### 26.4 상태와 관리자 액션
+
+- 상태는 "확인"(`paymentConfirmed=true`)/"미확인"(`paymentConfirmed=false`) 두 가지뿐이다. "반려" 상태나 재업로드 요청 플로우는 없다.
+- 관리자만 상태를 변경할 수 있다. 증빙 이미지를 보고 "결제 확인" 버튼을 누르면 확인 처리되고, 실수로 확인했거나 취소 등의 사유로 되돌려야 하면 "확인 취소" 버튼으로 다시 미확인 상태로 되돌릴 수 있다(관리자 액션의 사후 정정 허용, decisions.md D-14/D-23과 일관).
+- 증빙 이미지가 없어도 관리자는 확인 처리할 수 있다(대면 확인 등).
+- 자동 검증(OCR 등)은 하지 않는다 — 관리자가 이미지를 직접 보고 수동으로 판단한다.
+
+### 26.5 증빙 이미지 저장 방식 (decisions.md D-32)
+
+증빙 이미지는 별도 오브젝트 스토리지(Vercel Blob 등) 없이 **Turso DB에 base64 문자열로 저장**한다(`PaymentProof.imageData`). 업로드 전 클라이언트에서 이미지를 리사이즈/재인코딩해 용량을 줄이는 것을 구현 조건으로 한다(17·19번 데이터 모델/서비스 함수, decisions.md D-32 참고). 서버는 파일당 2MB 상한을 강제한다.
+
+### 26.6 UI 배치
+
+- 공개: `CancelLookup`의 예약 목록 테이블에 "결제확인" 열/버튼을 추가한다. 면제 대상은 배지로 "면제" 표시만 하고 버튼을 노출하지 않는다. 대상인데 미확인이면 업로드 버튼과 상태 배지("미확인"/업로드 후 "확인 대기")를, 확인 완료면 "확인됨" 배지를 보여준다.
+- 관리자: `AdminBookingsPanel`의 예약자 목록 각 행에 결제확인 상태 배지, 이미지 보기(업로드된 경우), 대리 업로드, 확인/확인 취소 버튼을 추가한다.
+- `CANCELLED` 상태 예약에는 결제확인 UI를 표시하지 않는다(취소된 예약은 대상에서 제외).
+
+### 26.7 입금 금액 표시
+
+결제 확인 대상 여부(26.2)를 판정하는 것과 별개로, 실제로 얼마를 입금해야 하는지 회원과 관리자에게 보여준다. 새로운 예외 규칙이 아니라 **기존 `paymentConfirmationRequired` 판정 결과에 고정 금액을 매핑**하는 것뿐이다 — 판정 로직(26.2)은 그대로 두고 표시 값만 추가한다.
+
+**금액 규칙 (고정 상수, 관리자가 변경하는 UI는 이번 범위에 없음 — YAGNI)**
+- `paymentConfirmationRequired === false`(면제): $0 — 표시하지 않는다.
+- `paymentConfirmationRequired === true` && `memberType === CASUAL`: **$16**
+- `paymentConfirmationRequired === true` && `memberType === ANNUAL`(월 멤버 미등록 순수 연 멤버, 또는 월 멤버이지만 본인 등록 요일이 아닌 날 참여 포함): **$13**
+- 통화 표시 형식은 `$16`처럼 정수 달러 앞에 `$`만 붙인다(소수점/천단위 구분자 불필요 — 금액이 항상 정수 상수이므로 `Intl.NumberFormat` 같은 별도 포매팅 없이 `` `$${amount}` `` 템플릿으로 충분하다).
+
+**적용 범위**: 이 판정은 상태(`CONFIRMED`/`WAITING`)와 무관하게 26.2와 동일한 대상(취소 제외)에 적용한다 — 기존 결제확인 배지가 보이는 곳(WAITING 포함)에는 항상 금액도 함께 보인다.
+
+**표시 위치 3곳**
+1. **공개 "내 예약 조회/취소" 화면(`CancelLookup`)**: 예약 목록 테이블의 "결제확인" 열, 상태 배지 바로 아래에 `paymentAmountDue > 0`일 때만 금액을 보여준다(예: "입금 금액 $16"). 면제 배지에는 추가하지 않는다(이미 "면제"로 충분).
+2. **관리자 예약자 목록(`AdminBookingsPanel`)**: 결제확인 셀의 상태 배지 바로 아래, "이미지 보기"/"대리 업로드"/"결제 확인" 버튼 행보다 위에 금액 텍스트를 보여준다(예: "입금 금액 $16"). 증빙 이미지가 아직 없어 "이미지 보기" 버튼이 없는 상태(미업로드)에도 항상 보이게 한다 — 관리자가 얼마를 받아야 하는지 미리 아는 것이 핵심 목적이므로 버튼 유무에 종속시키지 않는다.
+3. **관리자 예약일 상세 페이지(`app/admin/(protected)/booking-days/[id]/page.tsx`)**: "기본 정보" 카드에 "총 입금 예정 금액" 항목을 추가한다. **`CONFIRMED` 상태 예약만 합산**하며(`WAITING`/`CANCELLED` 제외), 이미 결제 확인된 건과 아직 미확인인 건을 구분하지 않고 "이 예약일에 총 얼마가 걷혀야 하는지"를 하나의 합계로 보여준다.
+
+**데이터 흐름**: 금액은 클라이언트에서 계산하지 않는다. 서버(`lookupBookingsByPhone`/`listBookingsForAdmin`)가 이미 계산해둔 `paymentConfirmationRequired`와 `memberType`을 바탕으로 각 예약 DTO에 `paymentAmountDue`(숫자, USD)를 함께 내려주고, 화면은 그 값을 그대로 표시/합산만 한다(19번 `getPaymentAmountDue` 참고). 새 DB 컬럼은 필요 없다(파생 값, 요청 시점 계산 원칙 유지).

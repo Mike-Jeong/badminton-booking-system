@@ -33,6 +33,11 @@ enum SlotMode {
   COMBINED
 }
 
+enum ProofUploadSource {
+  SELF
+  ADMIN
+}
+
 model AnnualMember {
   id              String   @id @default(cuid())
   name            String
@@ -131,6 +136,9 @@ model Booking {
   matchedAnnualMember   AnnualMember? @relation("MatchedAnnualMember", fields: [matchedAnnualMemberId], references: [id])
   status                BookingStatus
   source                BookingSource
+  paymentConfirmed      Boolean  @default(false) // decisions.md D-31, requirements.md 26번
+  paymentConfirmedAt    DateTime?                 // 확인 취소 시 다시 null로 되돌아감
+  paymentProof          PaymentProof?             // 1:1, 아래 모델 참고(decisions.md D-31 — 이미지는 분리 저장)
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
   cancelledAt           DateTime?
@@ -140,4 +148,18 @@ model Booking {
   @@index([bookingDayId, normalizedName, phoneHash])
   @@index([phoneHash])
   @@index([bookingDayId, status])
+}
+
+// 결제 증빙 이미지(decisions.md D-31·D-32). Booking과 분리한 이유: Booking은 이 시스템에서 가장
+// 자주/대량으로 조회되는 모델이라, 수백 KB 단위의 base64 이미지를 직접 컬럼으로 두면 일반 조회
+// 성능에 함정이 된다. 이미지는 관리자가 명시적으로 조회할 때만 이 모델을 통해 가져온다.
+model PaymentProof {
+  id         String            @id @default(cuid())
+  bookingId  String            @unique
+  booking    Booking           @relation(fields: [bookingId], references: [id])
+  imageData  String            // base64 인코딩된 이미지 바이트(Turso/SQLite에 텍스트로 저장, D-32)
+  mimeType   String            // "image/jpeg" | "image/png" | "image/webp"
+  uploadedBy ProofUploadSource // SELF(회원 셀프 업로드) | ADMIN(관리자 대리 업로드)
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt // 재업로드(교체) 시 갱신
 }

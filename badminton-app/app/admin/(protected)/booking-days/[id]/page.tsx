@@ -43,6 +43,11 @@ export default async function AdminBookingDayDetailPage({
   const waitingAnnual = waiting.filter((b) => b.memberType === "ANNUAL").length;
   const waitingCasual = waiting.filter((b) => b.memberType === "CASUAL").length;
   const adminBookings = await listBookingsForAdmin(id);
+  // 총 입금 예정 금액(requirements.md 26.7번): CONFIRMED 예약만 합산하며(WAITING/CANCELLED 제외),
+  // 이미 결제 확인된 건과 미확인 건을 구분하지 않는다.
+  const totalPaymentAmountDue = adminBookings
+    .filter((b) => b.status === "CONFIRMED")
+    .reduce((sum, b) => sum + b.paymentAmountDue, 0);
 
   return (
     <div className="space-y-8">
@@ -118,6 +123,10 @@ export default async function AdminBookingDayDetailPage({
                 </span>
               )}
             </p>
+          </div>
+          <div>
+            <p className="text-muted-foreground">총 입금 예정 금액</p>
+            <p className="font-medium">${totalPaymentAmountDue}</p>
           </div>
         </CardContent>
       </Card>

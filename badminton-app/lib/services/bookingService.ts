@@ -14,6 +14,10 @@ import { normalizeName, normalizePhone } from "@/lib/normalize";
 import { hashPhone, encryptPhone, decryptPhone } from "@/lib/security/phoneCrypto";
 import { isBookingDayEnded } from "@/lib/timezone";
 import { determineMemberType, type PrismaClientOrTx } from "@/lib/services/annualMemberService";
+import {
+  batchComputePaymentConfirmationRequirements,
+  getPaymentAmountDue,
+} from "@/lib/services/paymentProofService";
 
 export interface CreateBookingInput {
   bookingDayId: string;
@@ -171,7 +175,12 @@ export async function createBooking(input: CreateBookingInput) {
   return toBookingDTO(created);
 }
 
-/** 전화번호로 본인 예약 목록을 조회한다(requirements.md 14.1번). phoneHash로만 비교하며 복호화하지 않는다. */
+/**
+ * 전화번호로 본인 예약 목록을 조회한다(requirements.md 14.1번). phoneHash로만 비교하며
+ * 복호화하지 않는다. 결제 확인 관련 필드(requirements.md 26번)는 배치 판정 함수로 N+1 없이
+ * 계산하며, 목록 응답 비대화를 막기 위해 증빙 이미지 본문(imageData)은 절대 포함하지 않고
+ * hasPaymentProof(boolean)만 내려준다.
+ */
 export async function lookupBookingsByPhone(phone: string) {
   const normalizedPhone = normalizePhone(phone);
   if (!normalizedPhone) {
@@ -179,7 +188,7 @@ export async function lookupBookingsByPhone(phone: string) {
   }
   const phoneHash = hashPhone(normalizedPhone);
 
-  return prisma.booking.findMany({
+  const bookings = await prisma.booking.findMany({
     where: { phoneHash },
     select: {
       id: true,
@@ -187,11 +196,46 @@ export async function lookupBookingsByPhone(phone: string) {
       status: true,
       createdAt: true,
       cancelledAt: true,
+      memberType: true,
+      matchedAnnualMemberId: true,
+      paymentConfirmed: true,
+      paymentProof: { select: { id: true } },
       bookingDay: {
-        select: { id: true, date: true, label: true, location: true, endTime: true },
+        select: { id: true, date: true, dayOfWeek: true, label: true, location: true, endTime: true },
       },
     },
     orderBy: { createdAt: "desc" },
+  });
+
+  const requirementMap = await batchComputePaymentConfirmationRequirements(
+    bookings.map((b) => ({
+      id: b.id,
+      memberType: b.memberType,
+      matchedAnnualMemberId: b.matchedAnnualMemberId,
+      bookingDay: { date: b.bookingDay.date, dayOfWeek: b.bookingDay.dayOfWeek },
+    }))
+  );
+
+  return bookings.map((b) => {
+    const paymentConfirmationRequired = requirementMap.get(b.id) ?? true;
+    return {
+      id: b.id,
+      name: b.name,
+      status: b.status,
+      createdAt: b.createdAt,
+      cancelledAt: b.cancelledAt,
+      bookingDay: {
+        id: b.bookingDay.id,
+        date: b.bookingDay.date,
+        label: b.bookingDay.label,
+        location: b.bookingDay.location,
+        endTime: b.bookingDay.endTime,
+      },
+      paymentConfirmationRequired,
+      paymentConfirmed: b.paymentConfirmed,
+      hasPaymentProof: b.paymentProof !== null,
+      paymentAmountDue: getPaymentAmountDue(b.memberType, paymentConfirmationRequired),
+    };
   });
 }
 
@@ -302,24 +346,52 @@ export async function adminChangeBookingStatus(bookingId: string, status: Bookin
 
 /**
  * 관리자용 예약자 전체 목록(이름/전화번호/상태/유형/source, architecture.md 4장).
- * 전화번호는 이 함수에서만 복호화한다.
+ * 전화번호는 이 함수에서만 복호화한다. 결제 확인 관련 필드(requirements.md 26번)는 같은
+ * bookingDayId 안에서 배치 판정 함수로 N+1 없이 계산하며, 증빙 이미지 본문(imageData)은
+ * 절대 포함하지 않고 hasPaymentProof(boolean)만 내려준다(목록 응답 비대화 방지).
  */
 export async function listBookingsForAdmin(bookingDayId: string) {
   const bookings = await prisma.booking.findMany({
     where: { bookingDayId },
+    include: { paymentProof: { select: { id: true } } },
     orderBy: [{ createdAt: "asc" }],
   });
 
-  return bookings.map((b) => ({
-    id: b.id,
-    name: b.name,
-    phone: decryptPhone(b.phoneEncrypted),
-    memberType: b.memberType,
-    status: b.status,
-    source: b.source,
-    createdAt: b.createdAt,
-    cancelledAt: b.cancelledAt,
-  }));
+  const bookingDay = bookings.length
+    ? await prisma.bookingDay.findUnique({
+        where: { id: bookingDayId },
+        select: { date: true, dayOfWeek: true },
+      })
+    : null;
+
+  const requirementMap = bookingDay
+    ? await batchComputePaymentConfirmationRequirements(
+        bookings.map((b) => ({
+          id: b.id,
+          memberType: b.memberType,
+          matchedAnnualMemberId: b.matchedAnnualMemberId,
+          bookingDay,
+        }))
+      )
+    : new Map<string, boolean>();
+
+  return bookings.map((b) => {
+    const paymentConfirmationRequired = requirementMap.get(b.id) ?? true;
+    return {
+      id: b.id,
+      name: b.name,
+      phone: decryptPhone(b.phoneEncrypted),
+      memberType: b.memberType,
+      status: b.status,
+      source: b.source,
+      createdAt: b.createdAt,
+      cancelledAt: b.cancelledAt,
+      paymentConfirmationRequired,
+      paymentConfirmed: b.paymentConfirmed,
+      hasPaymentProof: b.paymentProof !== null,
+      paymentAmountDue: getPaymentAmountDue(b.memberType, paymentConfirmationRequired),
+    };
+  });
 }
 
 /**

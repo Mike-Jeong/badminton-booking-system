@@ -247,6 +247,12 @@ export async function deleteBookingDay(id: string) {
       );
     }
 
+    // PaymentProof.booking 관계는 ON DELETE RESTRICT이므로 Booking을 지우기 전에
+    // 먼저 지워야 FK 위반(P2003)이 발생하지 않는다.
+    await tx.paymentProof.deleteMany({
+      where: { booking: { bookingDayId: id } },
+    });
+
     const { count: deletedBookingCount } = await tx.booking.deleteMany({
       where: { bookingDayId: id },
     });
