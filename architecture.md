@@ -372,7 +372,7 @@ model Booking {
 
 | Method | Path | 설명 |
 |---|---|---|
-| GET | `/api/cron/club-days` | Vercel Cron이 매일 1회(뉴질랜드 기준 오전 10:30경) 호출. `assertCronSecret`으로 `Authorization: Bearer {CRON_SECRET}` 헤더 검증 후 `generateUpcomingClubDays()` 실행(decisions.md D-27 개정) |
+| GET | `/api/cron/club-days` | Vercel Cron이 매일 1회(뉴질랜드 기준 오후 10:30, 22:30경) 호출. `assertCronSecret`으로 `Authorization: Bearer {CRON_SECRET}` 헤더 검증 후 `generateUpcomingClubDays()` 실행(decisions.md D-27 개정) |
 
 ---
 
