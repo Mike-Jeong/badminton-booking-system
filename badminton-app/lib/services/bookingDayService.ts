@@ -270,6 +270,9 @@ export async function getBookingDayById(id: string) {
     where: { id },
     include: {
       bookings: {
+        // CANCELLED는 제외한다 — 이 목록은 DeleteBookingDayButton의 "N건의 예약이 연결되어
+        // 있습니다" 경고에도 쓰이는데(decisions.md D-17, 취소된 예약은 삭제 차단 대상이 아님),
+        // 취소 인원 수는 별도로 cancelledBookingsCount에 담아 반환한다.
         where: { status: { in: ["CONFIRMED", "WAITING"] } },
         select: {
           id: true,
@@ -287,5 +290,9 @@ export async function getBookingDayById(id: string) {
     throw new NotFoundError("예약일을 찾을 수 없습니다.");
   }
 
-  return bookingDay;
+  const cancelledBookingsCount = await prisma.booking.count({
+    where: { bookingDayId: id, status: "CANCELLED" },
+  });
+
+  return { ...bookingDay, cancelledBookingsCount };
 }

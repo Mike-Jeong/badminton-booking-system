@@ -34,6 +34,10 @@ export default async function AdminBookingDayDetailPage({
   const waiting = bookingDay.bookings.filter((b) => b.status === "WAITING");
   const confirmedCount = confirmed.length;
   const waitingCount = waiting.length;
+  // CANCELLED는 getBookingDayById가 반환하는 bookingDay.bookings에 포함되지 않으므로
+  // (D-17, DeleteBookingDayButton의 경고 카운트와 공유하는 목록이라 취소 건을 제외해둠)
+  // 별도로 계산된 cancelledBookingsCount를 사용한다.
+  const cancelledCount = bookingDay.cancelledBookingsCount;
   const confirmedAnnual = confirmed.filter((b) => b.memberType === "ANNUAL").length;
   const confirmedCasual = confirmed.filter((b) => b.memberType === "CASUAL").length;
   const waitingAnnual = waiting.filter((b) => b.memberType === "ANNUAL").length;
@@ -99,6 +103,10 @@ export default async function AdminBookingDayDetailPage({
                 </span>
               )}
             </p>
+          </div>
+          <div>
+            <p className="text-muted-foreground">취소 인원</p>
+            <p className="font-medium">{cancelledCount}명</p>
           </div>
           <div>
             <p className="text-muted-foreground">대기 인원</p>

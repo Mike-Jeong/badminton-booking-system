@@ -1,6 +1,7 @@
 /**
  * ClubDayGenerationService (architecture.md 2장, requirements.md 25.3번, decisions.md D-27~D-30)
- * - generateTodaysClubDays: 크론(GET /api/cron/club-days)이 호출하는 핵심 함수.
+ * - generateUpcomingClubDays: 크론(GET /api/cron/club-days)이 호출하는 핵심 함수. 실행 시점
+ *   기준 "모레"(+2일) 날짜에 대해 생성한다(decisions.md D-27 개정).
  * - "생성"과 "공개"를 한 스텝으로 처리한다(decisions.md D-27) — 생성되는 BookingDay는 항상
  *   isOpen=true다. "미리 생성해두고 나중에 공개 전환"하는 중간 상태는 두지 않는다.
  * - 패턴마다 개별 트랜잭션을 열어(패턴 간 격리) 중복 생성 확인 + BookingDay 생성 +
@@ -9,7 +10,12 @@
  */
 
 import { prisma } from "@/lib/db/prisma";
-import { getDayOfWeekInTimeZone, formatDateOnlyInTimeZone, dateOnlyToUtcMidnight } from "@/lib/timezone";
+import {
+  addDaysToDateOnly,
+  dateOnlyToUtcMidnight,
+  formatDateOnlyInTimeZone,
+  getDayOfWeekForDateOnly,
+} from "@/lib/timezone";
 import { applyMonthlyMembersToBookingDay } from "@/lib/services/monthlyMemberService";
 
 export type ClubDayGenerationStatus = "created" | "skipped" | "failed";
@@ -21,20 +27,26 @@ export interface ClubDayGenerationResult {
   error?: string;
 }
 
+/** 크론이 예약일을 생성하는 시점부터 실제 생성 대상일까지의 간격(일). decisions.md D-27 개정. */
+const GENERATION_LEAD_DAYS = 2;
+
 /**
- * 실행 시점의 Pacific/Auckland 기준 "오늘" 날짜/요일과 일치하는 활성 클럽데이 패턴을 찾아
- * BookingDay를 생성하고 즉시 공개(isOpen=true)한다(requirements.md 25.3번).
- * - "정확히 자정에 실행된다"고 가정하지 않는다 — Vercel Cron의 실행 시각 흔들림(deployment.md
- *   1-1장)을 감안해, 실행되는 순간의 날짜를 다시 계산해 그 날짜 기준으로 생성한다.
+ * 실행 시점의 Pacific/Auckland 기준 "모레"(+2일, GENERATION_LEAD_DAYS) 날짜/요일과 일치하는
+ * 활성 클럽데이 패턴을 찾아 BookingDay를 생성하고 즉시 공개(isOpen=true)한다(requirements.md
+ * 25.3번, decisions.md D-27 개정).
+ * - "정확히 정해진 시각에 실행된다"고 가정하지 않는다 — Vercel Cron의 실행 시각 흔들림
+ *   (deployment.md 1-1장)을 감안해, 실행되는 순간의 날짜를 다시 계산해 그 날짜+2일 기준으로
+ *   생성한다.
  * - 같은 패턴 + 같은 날짜 조합이 이미 생성돼 있으면 건너뛴다(멱등성, decisions.md D-28).
  */
-export async function generateTodaysClubDays(now: Date = new Date()): Promise<ClubDayGenerationResult[]> {
-  const todayDayOfWeek = getDayOfWeekInTimeZone(now);
+export async function generateUpcomingClubDays(now: Date = new Date()): Promise<ClubDayGenerationResult[]> {
   const todayDateOnly = formatDateOnlyInTimeZone(now);
-  const todayUtcMidnight = dateOnlyToUtcMidnight(todayDateOnly);
+  const targetDateOnly = addDaysToDateOnly(todayDateOnly, GENERATION_LEAD_DAYS);
+  const targetDayOfWeek = getDayOfWeekForDateOnly(targetDateOnly);
+  const targetUtcMidnight = dateOnlyToUtcMidnight(targetDateOnly);
 
   const patterns = await prisma.clubDayPattern.findMany({
-    where: { isActive: true, deletedAt: null, dayOfWeek: todayDayOfWeek },
+    where: { isActive: true, deletedAt: null, dayOfWeek: targetDayOfWeek },
   });
 
   const results: ClubDayGenerationResult[] = [];
@@ -43,7 +55,7 @@ export async function generateTodaysClubDays(now: Date = new Date()): Promise<Cl
     try {
       const result = await prisma.$transaction(async (tx) => {
         const existing = await tx.bookingDay.findFirst({
-          where: { clubDayPatternId: pattern.id, date: todayUtcMidnight },
+          where: { clubDayPatternId: pattern.id, date: targetUtcMidnight },
         });
         if (existing) {
           return { status: "skipped" as const };
@@ -51,8 +63,8 @@ export async function generateTodaysClubDays(now: Date = new Date()): Promise<Cl
 
         const bookingDay = await tx.bookingDay.create({
           data: {
-            date: todayUtcMidnight,
-            dayOfWeek: todayDayOfWeek,
+            date: targetUtcMidnight,
+            dayOfWeek: targetDayOfWeek,
             label: pattern.label,
             startTime: pattern.startTime,
             endTime: pattern.endTime,
