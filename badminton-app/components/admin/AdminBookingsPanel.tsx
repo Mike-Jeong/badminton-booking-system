@@ -148,7 +148,9 @@ export function AdminBookingsPanel({
             )}
             {bookings.map((b) => (
               <TableRow key={b.id}>
-                <TableCell>{b.name}</TableCell>
+                <TableCell className={b.status === "CANCELLED" ? "line-through text-muted-foreground" : undefined}>
+                  {b.name}
+                </TableCell>
                 <TableCell>{b.phone}</TableCell>
                 <TableCell>{b.memberType === "ANNUAL" ? "연 멤버" : "캐주얼"}</TableCell>
                 <TableCell>

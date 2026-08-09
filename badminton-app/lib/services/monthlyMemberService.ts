@@ -10,12 +10,21 @@
  * - 한 연 멤버를 여러 요일에 한 번에 등록하는 벌크 등록 지원(decisions.md D-25).
  */
 
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { ValidationError, NotFoundError, ConflictError } from "@/lib/errors";
-import { hasCapacity } from "@/lib/services/bookingService";
 import { formatDateOnlyInTimeZone, isBookingDayEnded } from "@/lib/timezone";
 import { decryptPhone } from "@/lib/security/phoneCrypto";
 import type { PrismaClientOrTx } from "@/lib/services/annualMemberService";
+
+/**
+ * 트랜잭션 안에서 월 멤버를 순회하며 매번 조회/생성 쿼리를 날리면(N+1), 월 멤버 수가 많을 때
+ * Prisma 기본 트랜잭션 타임아웃(5초)을 넘겨 500 에러가 발생할 수 있었다. 이를 보완하기 위해
+ * applyMonthlyMembersToBookingDayCore를 배치 조회/일괄 생성으로 바꾼 뒤에도, 방어적으로
+ * 타임아웃 여유를 조금 더 준다(근본 해결은 쿼리 수를 O(N)에서 O(1)로 줄이는 것이고, 이 값은
+ * 보조 수단이다).
+ */
+const APPLY_MONTHLY_MEMBERS_TRANSACTION_OPTIONS = { timeout: 15000 };
 
 export interface MonthlyMemberInput {
   annualMemberId: string;
@@ -287,6 +296,13 @@ export async function listMonthlyMembers(filter: ListMonthlyMembersFilter = {}) 
  * - MonthlyMember.isActive AND AnnualMember.isActive 모두 필요
  * - 중복 방지: 같은 예약일에 WAITING/CONFIRMED가 이미 있으면 스킵, CANCELLED만 있으면 재생성(D-08)
  * - 항상 memberType=ANNUAL, 슬롯 여유 있으면 CONFIRMED 없으면 WAITING
+ *
+ * 성능: 이전에는 월 멤버마다 "기존 예약 조회 → 슬롯 여유 확인(hasCapacity) → 생성" 3회
+ * 쿼리를 순차 실행했다(N명이면 왕복 3N회). 월 멤버 수가 많아지고 원격 DB(Turso/libSQL) 왕복
+ * 지연이 누적되면 Prisma 트랜잭션 기본 타임아웃(5초)을 넘겨 500 에러가 났다. 아래에서는
+ * 필요한 조회를 미리 배치로 한 번씩만 수행하고(기존 예약 일괄 조회, 확정 인원 수 1회 조회 후
+ * 메모리에서 누적), 생성도 createMany로 한 번에 묶어 쿼리 수를 멤버 수와 무관하게 O(1)로
+ * 줄인다.
  */
 async function applyMonthlyMembersToBookingDayCore(
   tx: PrismaClientOrTx,
@@ -310,49 +326,79 @@ async function applyMonthlyMembersToBookingDayCore(
     include: { annualMember: true },
   });
 
-  let createdCount = 0;
+  if (monthlyMembers.length === 0) {
+    return { createdCount: 0, skippedCount: 0 };
+  }
+
+  // 이 예약일에 이미 WAITING/CONFIRMED로 예약된 (정규화 이름, 전화번호 해시) 조합을 한 번에
+  // 조회한다. (annualMemberId, year, month, dayOfWeek) 조합은 유니크하므로 이 배치 안에서
+  // 두 월 멤버가 같은 키로 충돌할 일은 없다(서로 다른 연 멤버가 동일한 이름+전화번호로
+  // 중복 등록된, 정상 운영에서는 나오지 않는 데이터 이상 상황은 예외로 한다).
+  const existingBookings = await tx.booking.findMany({
+    where: {
+      bookingDayId,
+      OR: monthlyMembers.map((mm) => ({
+        normalizedName: mm.annualMember.normalizedName,
+        phoneHash: mm.annualMember.phoneHash,
+      })),
+    },
+    select: { normalizedName: true, phoneHash: true, status: true },
+  });
+  const activeKeys = new Set(
+    existingBookings
+      .filter((b) => b.status === "WAITING" || b.status === "CONFIRMED")
+      .map((b) => `${b.normalizedName} ${b.phoneHash}`)
+  );
+
+  // hasCapacity를 멤버마다 반복 호출하는 대신, 현재 확정 인원 수를 한 번만 조회하고
+  // 이후 새로 확정될 인원을 메모리에서 누적한다(항상 memberType=ANNUAL).
+  const capacityLimit = bookingDay.slotMode === "SEPARATED" ? bookingDay.annualSlots : bookingDay.totalSlots;
+  const confirmedWhere =
+    bookingDay.slotMode === "SEPARATED"
+      ? { bookingDayId, status: "CONFIRMED" as const, memberType: "ANNUAL" as const }
+      : { bookingDayId, status: "CONFIRMED" as const };
+  let confirmedCount = await tx.booking.count({ where: confirmedWhere });
+
+  const toCreate: Prisma.BookingCreateManyInput[] = [];
   let skippedCount = 0;
 
   for (const monthlyMember of monthlyMembers) {
     const annualMember = monthlyMember.annualMember;
-
-    const existingBookings = await tx.booking.findMany({
-      where: {
-        bookingDayId,
-        normalizedName: annualMember.normalizedName,
-        phoneHash: annualMember.phoneHash,
-      },
-      select: { status: true },
-    });
-    if (existingBookings.some((b) => b.status === "WAITING" || b.status === "CONFIRMED")) {
+    const key = `${annualMember.normalizedName} ${annualMember.phoneHash}`;
+    if (activeKeys.has(key)) {
       skippedCount += 1;
       continue;
     }
 
-    const status = (await hasCapacity(tx, bookingDay, "ANNUAL")) ? "CONFIRMED" : "WAITING";
+    const status: "CONFIRMED" | "WAITING" = confirmedCount < capacityLimit ? "CONFIRMED" : "WAITING";
+    if (status === "CONFIRMED") {
+      confirmedCount += 1;
+    }
 
-    await tx.booking.create({
-      data: {
-        bookingDayId,
-        name: annualMember.name,
-        normalizedName: annualMember.normalizedName,
-        phoneHash: annualMember.phoneHash,
-        phoneEncrypted: annualMember.phoneEncrypted,
-        memberType: "ANNUAL",
-        matchedAnnualMemberId: annualMember.id,
-        status,
-        source: "MONTHLY_MEMBER_AUTO",
-      },
+    toCreate.push({
+      bookingDayId,
+      name: annualMember.name,
+      normalizedName: annualMember.normalizedName,
+      phoneHash: annualMember.phoneHash,
+      phoneEncrypted: annualMember.phoneEncrypted,
+      memberType: "ANNUAL",
+      matchedAnnualMemberId: annualMember.id,
+      status,
+      source: "MONTHLY_MEMBER_AUTO",
     });
-    createdCount += 1;
   }
 
-  return { createdCount, skippedCount };
+  if (toCreate.length > 0) {
+    await tx.booking.createMany({ data: toCreate });
+  }
+
+  return { createdCount: toCreate.length, skippedCount };
 }
 
 /**
  * 단독 호출 시 자체 트랜잭션으로 감싸고, 예약일 생성 흐름 등 상위 트랜잭션에서는
- * 참여할 수 있도록 tx를 받는다(architecture.md 7장).
+ * 참여할 수 있도록 tx를 받는다(architecture.md 7장). 단독 호출 시 트랜잭션 타임아웃을
+ * 기본값(5초)보다 넉넉하게 준다(위 APPLY_MONTHLY_MEMBERS_TRANSACTION_OPTIONS 주석 참고).
  */
 export async function applyMonthlyMembersToBookingDay(
   bookingDayId: string,
@@ -361,5 +407,8 @@ export async function applyMonthlyMembersToBookingDay(
   if (tx) {
     return applyMonthlyMembersToBookingDayCore(tx, bookingDayId);
   }
-  return prisma.$transaction((trx) => applyMonthlyMembersToBookingDayCore(trx, bookingDayId));
+  return prisma.$transaction(
+    (trx) => applyMonthlyMembersToBookingDayCore(trx, bookingDayId),
+    APPLY_MONTHLY_MEMBERS_TRANSACTION_OPTIONS
+  );
 }
