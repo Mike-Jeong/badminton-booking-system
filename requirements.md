@@ -466,7 +466,7 @@ applyMonthlyMembersToBookingDay(bookingDayId)
 
 **Backend**
 - Next.js Route Handlers
-- 스케줄러: Vercel Cron — 클럽데이 자동 생성 전용으로 매일 1회 실행된다(decisions.md D-27). 이 프로젝트의 기존 원칙("별도 백그라운드 인프라 없이 요청 시점에 계산", 예: `isBookingDayEnded`, 대시보드 집계)에 대한 예외이며, 실제로 정해진 시각에 새 레코드를 써야 하는 이번 요구에만 한정해서 적용한다.
+- 스케줄러: Vercel Cron — 클럽데이 자동 생성 전용으로 매일 1회(뉴질랜드 기준 오후 10:30, 22:30경) 실행된다(decisions.md D-27). 이 프로젝트의 기존 원칙("별도 백그라운드 인프라 없이 요청 시점에 계산", 예: `isBookingDayEnded`, 대시보드 집계)에 대한 예외이며, 실제로 정해진 시각에 새 레코드를 써야 하는 이번 요구에만 한정해서 적용한다.
 
 **Database**
 - Turso (libSQL, SQLite 호환 서버리스 DB). 로컬 SQLite 파일 대신 사용한다 (확정, decisions.md D-09 참고). 스키마/쿼리 문법은 SQLite와 동일하며 Prisma의 sqlite 커넥터를 그대로 사용한다.
@@ -555,7 +555,7 @@ applyMonthlyMembersToBookingDay(bookingDayId)
 
 ### 25.3 생성 + 공개 로직 (크론)
 
-매일 1회(뉴질랜드 기준 오전 10:30경) 실행되는 크론이, 실행 시점의 Pacific/Auckland 기준 "오늘"에 2일을 더한 날짜("모레")와 그 요일을 계산해, 그 요일과 일치하는 활성 패턴(`isActive=true`, `deletedAt=null`)을 모두 찾는다(decisions.md D-27 개정 — 회원이 예약할 수 있는 시간을 최소 이틀 확보하기 위함). 예: 월요일 10:30에 크론이 실행되면 수요일 클럽데이가 생성된다. 각 패턴에 대해:
+매일 1회(뉴질랜드 기준 오후 10:30, 22:30경) 실행되는 크론이, 실행 시점의 Pacific/Auckland 기준 "오늘"에 2일을 더한 날짜("모레")와 그 요일을 계산해, 그 요일과 일치하는 활성 패턴(`isActive=true`, `deletedAt=null`)을 모두 찾는다(decisions.md D-27 개정 — 회원이 예약할 수 있는 시간을 최소 이틀 확보하기 위함). 예: 월요일 22:30에 크론이 실행되면 수요일 클럽데이가 생성된다. 각 패턴에 대해:
 
 1. 이미 그 날짜(모레)로 생성된 적이 있는지 확인한다(`clubDayPatternId` + `date` 조합, decisions.md D-28). 이미 있으면 건너뛴다(멱등성 보장 — 크론이 하루에 두 번 이상 실행돼도 중복 생성되지 않는다).
 2. 없으면 패턴의 필드값을 그대로 복사해 `BookingDay`를 생성한다. 이때 `isOpen`은 항상 `true`다 — "생성"과 "공개"가 한 스텝으로 동시에 일어난다(decisions.md D-27, "미리 생성해두고 나중에 공개 전환"하는 방식이 아니다).
