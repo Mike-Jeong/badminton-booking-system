@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -17,6 +17,7 @@ import {
 import { formatDateOnlyInTimeZone, getTodayDateOnlyInTimeZone, isBookingDayEnded } from "@/lib/timezone";
 import { useLocale } from "@/lib/i18n/LanguageContext";
 import { dictionary, translateApiErrorMessage } from "@/lib/i18n/dictionary";
+import { compressImageFile } from "@/lib/imageCompression";
 
 interface LookupBooking {
   id: string;
@@ -25,6 +26,10 @@ interface LookupBooking {
   createdAt: string;
   cancelledAt: string | null;
   bookingDay: { id: string; date: string; label: string | null; location: string; endTime: string };
+  paymentConfirmationRequired: boolean;
+  paymentConfirmed: boolean;
+  hasPaymentProof: boolean;
+  paymentAmountDue: number;
 }
 
 /**
@@ -48,6 +53,9 @@ export function CancelLookup() {
   const [rowError, setRowError] = useState<Record<string, string>>({});
   const [fromDate, setFromDate] = useState(defaultFrom);
   const [toDate, setToDate] = useState(defaultTo);
+  const [uploadingId, setUploadingId] = useState<string | null>(null);
+  const [paymentMessage, setPaymentMessage] = useState<Record<string, { text: string; isError: boolean }>>({});
+  const fileInputRefs = useRef<Map<string, HTMLInputElement>>(new Map());
 
   const filteredBookings =
     bookings?.filter((b) => {
@@ -109,6 +117,46 @@ export function CancelLookup() {
       setRowError((prev) => ({ ...prev, [bookingId]: t.networkError }));
     } finally {
       setCancellingId(null);
+    }
+  }
+
+  async function handleUploadFile(bookingId: string, file: File) {
+    setUploadingId(bookingId);
+    setPaymentMessage((prev) => ({ ...prev, [bookingId]: { text: "", isError: false } }));
+    try {
+      const compressed = await compressImageFile(file);
+      const formData = new FormData();
+      formData.append("file", compressed);
+      formData.append("phone", phone);
+
+      const res = await fetch(`/api/bookings/${bookingId}/payment-proof`, {
+        method: "POST",
+        body: formData,
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setPaymentMessage((prev) => ({
+          ...prev,
+          [bookingId]: {
+            text: json?.error?.message
+              ? translateApiErrorMessage(locale, json.error.message)
+              : t.paymentUploadFallbackError,
+            isError: true,
+          },
+        }));
+        return;
+      }
+      setBookings(
+        (prev) => prev?.map((b) => (b.id === bookingId ? { ...b, hasPaymentProof: true } : b)) ?? null
+      );
+      setPaymentMessage((prev) => ({
+        ...prev,
+        [bookingId]: { text: t.paymentUploadSuccess, isError: false },
+      }));
+    } catch {
+      setPaymentMessage((prev) => ({ ...prev, [bookingId]: { text: t.networkError, isError: true } }));
+    } finally {
+      setUploadingId(null);
     }
   }
 
@@ -190,20 +238,21 @@ export function CancelLookup() {
                   <TableHead>{t.date}</TableHead>
                   <TableHead>{t.name}</TableHead>
                   <TableHead>{t.status}</TableHead>
+                  <TableHead>{t.payment}</TableHead>
                   <TableHead></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {bookings.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={4} className="py-6 text-center text-muted-foreground">
+                    <TableCell colSpan={5} className="py-6 text-center text-muted-foreground">
                       {t.empty}
                     </TableCell>
                   </TableRow>
                 )}
                 {bookings.length > 0 && filteredBookings?.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={4} className="py-6 text-center text-muted-foreground">
+                    <TableCell colSpan={5} className="py-6 text-center text-muted-foreground">
                       {t.emptyFiltered}
                     </TableCell>
                   </TableRow>
@@ -220,6 +269,66 @@ export function CancelLookup() {
                       <Badge variant={b.status === "CONFIRMED" ? "default" : "secondary"}>
                         {t.statusLabel[b.status]}
                       </Badge>
+                    </TableCell>
+                    <TableCell>
+                      {b.status !== "CANCELLED" && (
+                        <div className="space-y-1">
+                          {!b.paymentConfirmationRequired ? (
+                            <Badge variant="secondary">{t.paymentExempt}</Badge>
+                          ) : (
+                            <>
+                              <Badge variant={b.paymentConfirmed ? "default" : "secondary"}>
+                                {b.paymentConfirmed
+                                  ? t.paymentConfirmed
+                                  : b.hasPaymentProof
+                                    ? t.paymentAwaitingConfirmation
+                                    : t.paymentUnconfirmed}
+                              </Badge>
+                              {b.paymentAmountDue > 0 && (
+                                <p className="text-xs text-muted-foreground">
+                                  {t.paymentAmountDue(b.paymentAmountDue)}
+                                </p>
+                              )}
+                              {!b.paymentConfirmed && (
+                                <div>
+                                  <input
+                                    type="file"
+                                    accept="image/jpeg,image/png,image/webp"
+                                    className="hidden"
+                                    ref={(el) => {
+                                      if (el) fileInputRefs.current.set(b.id, el);
+                                      else fileInputRefs.current.delete(b.id);
+                                    }}
+                                    onChange={(e) => {
+                                      const file = e.target.files?.[0];
+                                      e.target.value = "";
+                                      if (file) void handleUploadFile(b.id, file);
+                                    }}
+                                  />
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    disabled={uploadingId === b.id}
+                                    onClick={() => fileInputRefs.current.get(b.id)?.click()}
+                                  >
+                                    {uploadingId === b.id ? t.paymentUploading : t.paymentUpload}
+                                  </Button>
+                                </div>
+                              )}
+                              {paymentMessage[b.id]?.text && (
+                                <p
+                                  role="alert"
+                                  aria-live="assertive"
+                                  className={`text-xs ${paymentMessage[b.id].isError ? "text-destructive" : "text-muted-foreground"}`}
+                                >
+                                  {paymentMessage[b.id].text}
+                                </p>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      )}
                     </TableCell>
                     <TableCell>
                       {b.status !== "CANCELLED" &&

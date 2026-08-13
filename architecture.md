@@ -33,6 +33,7 @@ app/
     bookings/route.ts                 # POST (사용자 예약 신청)
     bookings/lookup/route.ts          # POST (전화번호로 조회)
     bookings/[id]/cancel/route.ts     # POST (사용자 취소)
+    bookings/[id]/payment-proof/route.ts  # POST (사용자 셀프 결제증빙 업로드, 신규, requirements.md 26번)
     cron/club-days/route.ts           # GET (신규, Vercel Cron 전용, CRON_SECRET 헤더로 보호. /api/admin 바깥이라
                                        # 관리자 세션 미들웨어 대상이 아님 — 이 라우트 자체에서 인증 검증)
     admin/login/route.ts              # POST
@@ -44,6 +45,8 @@ app/
     admin/bookings/route.ts           # POST (관리자 수동 예약 추가, source=ADMIN)
     admin/bookings/[id]/route.ts      # PATCH (상태 변경/승인)
     admin/bookings/[id]/cancel/route.ts # POST (관리자 취소 처리)
+    admin/bookings/[id]/payment-proof/route.ts       # GET, POST (신규, 이미지 조회/대리 업로드, requirements.md 26번)
+    admin/bookings/[id]/payment-confirmation/route.ts # PATCH (신규, 확인/확인취소, requirements.md 26번)
     admin/annual-members/route.ts     # GET, POST
     admin/annual-members/[id]/route.ts # PATCH, DELETE
     admin/monthly-members/route.ts    # GET, POST
@@ -68,11 +71,17 @@ lib/
     dashboardService.ts      # 대시보드 집계
     clubDayPatternService.ts     # 클럽데이 패턴 CRUD (신규, requirements.md 25번)
     clubDayGenerationService.ts  # generateUpcomingClubDays — 크론이 호출하는 생성 로직 (신규)
+    paymentProofService.ts       # isPaymentConfirmationRequired(단건/배치), uploadPaymentProof,
+                                  # getPaymentProof, setPaymentConfirmation (신규, requirements.md 26번,
+                                  # decisions.md D-31·D-32)
   validation/
     bookingSlots.ts             # assertTimeRange/validateSlots — bookingDayService.ts에서 추출해 공유
                                  # (신규, clubDayPatternService도 동일 검증 규칙을 재사용하기 위함)
   normalize.ts                # normalizeName, normalizePhone
   timezone.ts                  # Pacific/Auckland 관련 유틸(오늘 날짜, dayOfWeek 계산)
+  imageCompression.ts          # compressImageFile — 클라이언트 전용(브라우저 Canvas/Image API),
+                                # 결제증빙 업로드 전 리사이즈/재인코딩 (신규, decisions.md D-32,
+                                # 새 npm 의존성 없음)
   security/
     phoneCrypto.ts             # hashPhone(HMAC-SHA256), encryptPhone/decryptPhone(AES-256-GCM), PII_SECRET_KEY 기반
   auth/
@@ -164,6 +173,15 @@ vercel.json                    # crons 설정 (신규, deployment.md 참고)
   플래그(`WAITING` 존재 여부). "슬롯 초과" 대신 이 지표를 쓰는 이유는 decisions.md D-16 참고 —
   D-14/D-15 이후 앱의 정상 동작으로는 슬롯 초과 상태 자체가 발생하지 않는다.
 
+### PaymentProofService (`lib/services/paymentProofService.ts`, 신규, requirements.md 26번)
+- `isPaymentConfirmationRequired(booking, bookingDay, client)`: 단건 판정. `booking.memberType !== "ANNUAL"` 이거나 `matchedAnnualMemberId`가 없으면 즉시 `true`. `ANNUAL`이면 `client.monthlyMember.findFirst({ where: { annualMemberId: booking.matchedAnnualMemberId, isActive: true, year, month, dayOfWeek: bookingDay.dayOfWeek } })`를 조회해(연/월은 `formatDateOnlyInTimeZone(bookingDay.date)`를 파싱) 존재 여부의 역(`!found`)을 반환한다.
+- `batchComputePaymentConfirmationRequirements(bookings, client)`: N+1 회피용 배치 버전. 월 멤버 자동 배정 성능 개선(architecture.md `MonthlyMemberService` 항목 참고)과 동일한 이유로, 이 함수 하나로 목록 조회 경로 전체를 처리한다.
+  - `listBookingsForAdmin(bookingDayId)`처럼 **같은 `bookingDayId`의 예약 목록**을 다룰 때는 `bookingDay`가 하나뿐이므로 (연도, 월, 요일)을 한 번만 계산하고, 대상 `matchedAnnualMemberId` 집합에 대해 `monthlyMember.findMany`를 **단 1회** 호출해 일치 집합(Set)을 만든 뒤 각 예약을 메모리에서 판정한다.
+  - `lookupBookingsByPhone(phone)`처럼 **여러 `bookingDay`에 걸친 예약 목록**을 다룰 때는, 관련된 `matchedAnnualMemberId` 전체에 대해 `monthlyMember.findMany({ where: { annualMemberId: { in: ids }, isActive: true } })`를 1회 호출해 `Map<annualMemberId, Set<"year-month-dayOfWeek">>`를 만든 뒤, 각 예약을 자신의 `bookingDay`의 (연도, 월, `dayOfWeek`)로 메모리에서 조회한다(예약 건수와 무관하게 쿼리 수는 O(1)).
+- `uploadPaymentProof(bookingId, file, uploadedBy, phone?)`: `uploadedBy === "SELF"`면 `phoneHash` 검증(취소와 동일 패턴) 후 진행, `"ADMIN"`이면 생략. `CANCELLED` 예약은 거부(`ConflictError`). `isBookingDayEnded`는 검사하지 않는다(requirements.md 26.3). MIME 타입(jpeg/png/webp)과 2MB 상한을 검증(`ValidationError`). `prisma.paymentProof.upsert({ where: { bookingId }, ... })`로 기존 증빙을 교체하거나 새로 생성한다.
+- `getPaymentProof(bookingId)`: 관리자 전용 조회. `PaymentProof`가 없으면 `NotFoundError`, 있으면 `{ imageDataUrl: \`data:${mimeType};base64,${imageData}\`, uploadedBy, updatedAt }`을 반환한다. `Booking`을 조회하는 다른 함수들과 달리 이미지가 필요할 때만 명시적으로 호출된다(decisions.md D-31 — `Booking`과 분리한 이유).
+- `setPaymentConfirmation(bookingId, confirmed)`: 관리자 전용. `booking.paymentConfirmed`/`paymentConfirmedAt`을 갱신(확인 취소 시 `paymentConfirmedAt: null`). 증빙 이미지 유무를 검사하지 않는다.
+
 ---
 
 ## 3. Prisma 스키마 초안
@@ -205,6 +223,11 @@ enum BookingSource {
 enum SlotMode {
   SEPARATED
   COMBINED
+}
+
+enum ProofUploadSource {
+  SELF
+  ADMIN
 }
 
 model AnnualMember {
@@ -305,6 +328,9 @@ model Booking {
   matchedAnnualMember   AnnualMember? @relation("MatchedAnnualMember", fields: [matchedAnnualMemberId], references: [id])
   status                BookingStatus
   source                BookingSource
+  paymentConfirmed      Boolean  @default(false)  // decisions.md D-31, requirements.md 26번
+  paymentConfirmedAt    DateTime?                  // 확인 취소 시 다시 null로 되돌아감
+  paymentProof          PaymentProof?              // 1:1, 아래 모델 참고(decisions.md D-31 — 이미지는 분리 저장)
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
   cancelledAt           DateTime?
@@ -314,6 +340,20 @@ model Booking {
   @@index([bookingDayId, normalizedName, phoneHash])
   @@index([phoneHash])
   @@index([bookingDayId, status])
+}
+
+// 결제 증빙 이미지(decisions.md D-31·D-32). Booking과 분리한 이유: Booking은 이 시스템에서 가장
+// 자주/대량으로 조회되는 모델이라, 수백 KB 단위의 base64 이미지를 직접 컬럼으로 두면 일반 조회
+// 성능에 함정이 된다. 이미지는 관리자가 명시적으로 조회할 때만 이 모델을 통해 가져온다.
+model PaymentProof {
+  id         String            @id @default(cuid())
+  bookingId  String            @unique
+  booking    Booking           @relation(fields: [bookingId], references: [id])
+  imageData  String            // base64 인코딩된 이미지 바이트(Turso/SQLite에 텍스트로 저장, D-32)
+  mimeType   String            // "image/jpeg" | "image/png" | "image/webp"
+  uploadedBy ProofUploadSource // SELF(회원 셀프 업로드) | ADMIN(관리자 대리 업로드)
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt // 재업로드(교체) 시 갱신
 }
 ```
 
@@ -335,6 +375,7 @@ model Booking {
 | POST | `/api/bookings` | 예약 신청 (name, phone, bookingDayId) → `createBooking` |
 | POST | `/api/bookings/lookup` | 전화번호로 본인 예약 목록 조회 → `lookupBookingsByPhone` |
 | POST | `/api/bookings/[id]/cancel` | 예약 취소 (phone) → `cancelBooking` |
+| POST | `/api/bookings/[id]/payment-proof` | 결제 증빙 셀프 업로드 (multipart/form-data: file, phone) → `uploadPaymentProof(..., "SELF", phone)` (신규, requirements.md 26.3) |
 
 ### 관리자용 (`middleware.ts`로 보호, `/api/admin/login` 제외)
 
@@ -352,6 +393,9 @@ model Booking {
 | POST | `/api/admin/bookings` | 관리자 수동 예약 추가 (source=ADMIN) |
 | PATCH | `/api/admin/bookings/[id]` | 예약 상태 변경(대기→확정 등) |
 | POST | `/api/admin/bookings/[id]/cancel` | 관리자에 의한 예약 취소 처리 |
+| GET | `/api/admin/bookings/[id]/payment-proof` | 결제 증빙 이미지 조회(data URL) → `getPaymentProof` (신규, requirements.md 26번) |
+| POST | `/api/admin/bookings/[id]/payment-proof` | 결제 증빙 대리 업로드(multipart/form-data: file) → `uploadPaymentProof(..., "ADMIN")` (신규) |
+| PATCH | `/api/admin/bookings/[id]/payment-confirmation` | 결제 확인/확인취소 (body: `{ confirmed: boolean }`) → `setPaymentConfirmation` (신규) |
 | GET | `/api/admin/annual-members` | 연 멤버 목록 |
 | POST | `/api/admin/annual-members` | 연 멤버 등록 |
 | PATCH | `/api/admin/annual-members/[id]` | 연 멤버 수정/비활성화 |
@@ -367,6 +411,11 @@ model Booking {
 | GET | `/api/admin/dashboard` | 대시보드 요약 데이터 |
 
 예약자 목록/연 멤버 목록을 반환하는 GET 라우트는 DB의 `phoneEncrypted`를 서버(route handler)에서 복호화해 평문 전화번호로 응답에 담는다. 클라이언트로는 항상 복호화된 평문이 내려가며, `phoneHash`/`phoneEncrypted` 원값은 API 응답에 노출하지 않는다.
+
+**결제 증빙 관련 신규 라우트 비고**
+- `listBookingsForAdmin`(`GET /api/admin/booking-days/[id]/bookings`)과 `lookupBookingsByPhone`(`POST /api/bookings/lookup`)의 응답에는 `paymentConfirmationRequired`(계산값)·`paymentConfirmed`·`hasPaymentProof`(boolean, `PaymentProof` 존재 여부)만 포함하고, `PaymentProof.imageData`(base64 본문)는 절대 포함하지 않는다. 이미지 자체는 `GET /api/admin/bookings/[id]/payment-proof`를 관리자가 명시적으로 호출했을 때만 내려간다(decisions.md D-31, 목록 응답 비대화 방지).
+- 업로드 라우트(`POST /api/bookings/[id]/payment-proof`, `POST /api/admin/bookings/[id]/payment-proof`)는 `multipart/form-data`를 Next.js Route Handler의 내장 `Request.formData()`(Web API)로 파싱한다. 별도 파서 라이브러리(`multer`, `formidable` 등)를 추가하지 않는다(decisions.md D-32, 최소 의존성 원칙). 서버는 파일 크기 2MB 상한과 MIME 타입(jpeg/png/webp)을 검증한다.
+- 클라이언트 업로드 전 압축(`lib/imageCompression.ts`)도 브라우저 네이티브 `Image`/`HTMLCanvasElement`/`canvas.toBlob` API만 사용하며 새 npm 의존성이 없다. 즉 이번 기능은 `package.json`에 어떤 패키지도 추가하지 않는다(`@vercel/blob` 등 오브젝트 스토리지 SDK 불필요, decisions.md D-32).
 
 ### 크론용 (`/api/admin/*` 미들웨어 보호 대상이 아님, 라우트 자체에서 `CRON_SECRET` 검증)
 
