@@ -271,7 +271,7 @@ export function CancelLookup() {
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      {b.status !== "CANCELLED" && (
+                      {b.status === "CONFIRMED" && (
                         <div className="space-y-1">
                           {!b.paymentConfirmationRequired ? (
                             <Badge variant="secondary">{t.paymentExempt}</Badge>

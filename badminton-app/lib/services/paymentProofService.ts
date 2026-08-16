@@ -123,9 +123,9 @@ export async function batchComputePaymentConfirmationRequirements(
 
 /**
  * 결제 증빙 업로드(requirements.md 26.3·19번). uploadedBy === "SELF"면 phoneHash 검증(취소와
- * 동일 패턴)을 거치고, "ADMIN"이면 생략한다. CANCELLED 예약은 거부하며, 예약일 종료 여부
- * (isBookingDayEnded)는 검사하지 않는다 — 결제 증빙은 세션 종료 후에도 항상 업로드 가능하다.
- * 기존 증빙이 있으면 교체(재업로드), 없으면 새로 생성한다.
+ * 동일 패턴)을 거치고, "ADMIN"이면 생략한다. CONFIRMED 상태의 예약만 허용하며(WAITING·CANCELLED
+ * 모두 거부), 예약일 종료 여부(isBookingDayEnded)는 검사하지 않는다 — 결제 증빙은 세션 종료
+ * 후에도 항상 업로드 가능하다. 기존 증빙이 있으면 교체(재업로드), 없으면 새로 생성한다.
  */
 export async function uploadPaymentProof(
   bookingId: string,
@@ -148,8 +148,8 @@ export async function uploadPaymentProof(
     }
   }
 
-  if (booking.status === "CANCELLED") {
-    throw new ConflictError("취소된 예약에는 결제 증빙을 업로드할 수 없습니다.");
+  if (booking.status !== "CONFIRMED") {
+    throw new ConflictError("확정된 예약만 결제 증빙을 업로드할 수 있습니다.");
   }
 
   if (!(file instanceof File)) {

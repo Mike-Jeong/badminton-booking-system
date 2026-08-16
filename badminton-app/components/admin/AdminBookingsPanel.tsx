@@ -249,7 +249,7 @@ export function AdminBookingsPanel({
                 </TableCell>
                 <TableCell className="text-xs text-muted-foreground">{SOURCE_LABEL[b.source]}</TableCell>
                 <TableCell>
-                  {b.status !== "CANCELLED" && (
+                  {b.status === "CONFIRMED" && (
                     <div className="space-y-1">
                       {!b.paymentConfirmationRequired ? (
                         <Badge variant="secondary">면제</Badge>
