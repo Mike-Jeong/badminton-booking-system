@@ -163,3 +163,29 @@ model PaymentProof {
   createdAt  DateTime          @default(now())
   updatedAt  DateTime          @updatedAt // 재업로드(교체) 시 갱신
 }
+
+// 참여자 영구 식별 코드(오프라인 매칭 프로그램 연동용, decisions.md D-33, requirements.md 27번).
+// AnnualMember/Booking 어느 쪽에도 FK로 종속되지 않는다 — 의도적으로 독립 모델이다(D-33 사유 참고).
+// 신원 키(normalizedName+phoneHash)는 Booking의 중복 예약 판정(18번)과 동일한 정의를 재사용한다.
+model ParticipantCode {
+  id                 String   @id @default(cuid())
+  name               String   // 표시용, 정규화된 이름을 최신 값으로 유지(예약할 때마다 갱신, 배치 경로는 예외)
+  normalizedName     String
+  phoneHash          String   // HMAC-SHA256(normalizedPhone) — Booking/AnnualMember와 동일한 조회용 해시
+  phoneEncrypted     String   // AES-256-GCM(normalizedPhone) — CSV 내보내기(27.5번) 시에만 복호화
+  code               String   @unique // 12자 랜덤 문자열(crypto.randomBytes(9).toString("base64url")). QR에는 이 값만 인코딩
+  excludedFromExport Boolean  @default(false) // true면 CSV 내보내기에서 제외(opt-out, decisions.md D-34 개정 1).
+                                              // 관리자가 다시 false로 되돌리기 전까지 영구 유지
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([normalizedName, phoneHash])
+}
+
+// CSV 내보내기 이력(decisions.md D-34 개정 2, requirements.md 27.5.3번). "누가" 받았는지는 기록하지
+// 않는다 — 관리자가 공유 비밀번호 하나로 로그인하는 단일 계정 체제(architecture.md 5장)라 의미가 없다.
+model ParticipantCodeExportLog {
+  id            String   @id @default(cuid())
+  exportedAt    DateTime @default(now())
+  exportedCount Int // 그 시점에 실제로 CSV에 담긴 행 수(excludedFromExport=false 필터 반영 후)
+}

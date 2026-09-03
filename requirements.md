@@ -148,8 +148,13 @@ annualMemberId + year + month + dayOfWeek
 6. 예약일 슬롯 정책 확인
 7. 자리가 있으면 `CONFIRMED`
 8. 자리가 없으면 `WAITING`
+9. 참여자 영구 식별 코드를 발급/재사용한다(memberType과 무관, 27번 참고)
 
 클라이언트에서 `memberType`을 전달하지 않는다. 서버가 직접 계산한다.
+
+**전화번호 입력 UX (신규, 27.6번 참고)**
+- 예약 신청 폼의 전화번호 입력칸에는 저장 형식 안내(`placeholder="0212345678"`)를 표시한다.
+- 이름/전화번호 입력칸에는 브라우저 자동완성이 동작하도록 각각 `autoComplete="name"`, `autoComplete="tel"`을 지정한다.
 
 **종료된 예약일 (decisions.md D-23)**
 예약일의 `date + endTime`(Pacific/Auckland 기준)이 이미 지났으면, 사용자 셀프 신청은 거부된다("이미 종료된 예약일에는 신청할 수 없습니다."). 관리자 액션(`adminCreateBooking` 등)은 이 제한을 받지 않는다. 종료 여부와 무관하게 목록/상세 조회는 계속 가능하다("종료됨" 배지로 표시).
@@ -257,6 +262,7 @@ CANCELLED
 - 월 멤버 자동 배정 실행
 - 클럽데이 패턴 등록/수정/비활성화/삭제 (25번 참고)
 - 결제 증빙 대리 업로드 및 결제 확인/확인 취소 처리 (26번 참고)
+- 참여자 코드 CSV 내보내기 및 내보내기 제외 대상 관리, 내보내기 이력 확인 (27번 참고)
 
 ## 16. 관리자 대시보드 (경고 지표 개정, decisions.md D-16)
 
@@ -373,6 +379,27 @@ PaymentProof {
   createdAt
   updatedAt    // 재업로드(교체) 시 갱신
 }
+
+ParticipantCode {
+  id
+  name                 // 표시용, 정규화된 이름을 최신 값으로 유지(예약할 때마다 갱신)
+  normalizedName
+  phoneHash            // HMAC-SHA256(정규화된 전화번호) — Booking/AnnualMember와 동일한 신원 키(27번, decisions.md D-33)
+  phoneEncrypted       // AES-256-GCM(정규화된 전화번호) — CSV 내보내기(27.5번) 시에만 복호화
+  code                 // 12자 랜덤 문자열, 유니크. QR에 담기는 값(이 값만 인코딩, 이름/전화번호 미포함)
+  excludedFromExport   // boolean, 기본 false. true면 CSV 내보내기(27.5번)에서 제외. 관리자가 화면에서 토글하며,
+                        // 껐다 켜기 전까지 영구적으로 유지된다(신규, requirements.md 27.5번, decisions.md D-34)
+  createdAt
+  updatedAt
+
+  @@unique([normalizedName, phoneHash])
+}
+
+ParticipantCodeExportLog {
+  id
+  exportedAt     // CSV를 실제로 생성해 응답한 시각
+  exportedCount  // 그 시점에 CSV에 담긴 행 수(excludedFromExport=false 필터 반영 후 실제 건수)
+}
 ```
 
 **전화번호 저장 방식 (확정, decisions.md D-10)**
@@ -488,7 +515,62 @@ applyMonthlyMembersToBookingDay(bookingDayId)
 - 중복 예약 확인
 - 예약 자동 생성 (source = `MONTHLY_MEMBER_AUTO`)
 - 슬롯이 있으면 `CONFIRMED`, 없으면 `WAITING`
+- 대상 월 멤버 전원에 대해 `ensureParticipantCodesBatch`를 같은 트랜잭션에서 호출해 참여자 코드를 배치로 발급/재사용한다(27번 참고)
 - 결과로 생성 수, 스킵 수 반환
+
+### ensureParticipantCode (신규, 27번, decisions.md D-33)
+```ts
+ensureParticipantCode(name: string, phone: string)
+```
+- 이름/전화번호 정규화 → `phoneHash` 계산
+- `normalizedName + phoneHash` 조합으로 기존 `ParticipantCode` 조회
+- 있으면: 표시용 `name`이 최신 정규화 이름과 다르면 갱신, `code`는 그대로 반환(재발급하지 않음). `phoneEncrypted`는 재암호화하지 않는다(phoneHash가 이미 일치하므로 평문 값이 동일함이 보장됨)
+- 없으면: 12자 랜덤 문자열(`code`)을 생성해 새로 등록 후 반환. 동시 요청으로 인한 유니크 충돌(같은 신원이 동시에 두 트랜잭션에서 최초 생성 시도) 발생 시 재조회해 기존 값을 반환한다
+- `createBooking`/`adminCreateBooking`(단건 예약 생성 경로) 내부에서 예약 생성과 같은 트랜잭션으로 호출되며, 반환된 `code`는 `participantCode` 필드로 예약 응답 DTO에 포함된다
+
+### ensureParticipantCodesBatch (신규, 27번, decisions.md D-33)
+```ts
+ensureParticipantCodesBatch(participants: { name: string; phone: string }[])
+```
+- `applyMonthlyMembersToBookingDay`(월 멤버 자동 배정)처럼 여러 명을 한 번에 처리하는 경로에서 N+1 쿼리를 피하기 위한 배치 버전(`batchComputePaymentConfirmationRequirements`와 동일한 이유, 19번 참고)
+- 대상 전체의 `normalizedName + phoneHash` 조합을 한 번의 조회로 기존 등록 여부를 확인하고, 없는 조합만 모아 한 번의 `createMany`로 코드를 발급한다
+- 성능을 위해 표시용 `name` 갱신은 이 배치 경로에서는 수행하지 않는다(단건 경로에서 그 사람이 직접 예약할 때 자연스럽게 갱신됨). 코드 재사용 자체에는 영향 없음
+- 반환값은 호출자가 사용하지 않는다(코드 발급/재사용 자체가 목적)
+
+### listParticipantCodesForExport (신규, 27.5번, decisions.md D-34)
+```ts
+listParticipantCodesForExport()
+```
+- `ParticipantCode` 중 `excludedFromExport = false`인 행만 이름 오름차순으로 조회 (활성/비활성, memberType 등 그 외 필터는 없음 — 개별 제외 설정만 적용, decisions.md D-34 개정)
+- 각 행의 `phoneEncrypted`를 복호화해 `{ code, name, phone }` 형태로 반환 (관리자 CSV 내보내기 전용, 다른 목적으로 호출하지 않음)
+
+### listParticipantCodesForAdmin (신규, 27.5번, decisions.md D-34)
+```ts
+listParticipantCodesForAdmin()
+```
+- `ParticipantCode` 전체(제외 설정된 행 포함)를 이름 오름차순으로 조회
+- 각 행의 `phoneEncrypted`를 복호화해 `{ id, code, name, phone, excludedFromExport }` 형태로 반환 (관리자 화면(`/admin/participant-codes`) 목록 렌더링 전용 — CSV 내보내기(`listParticipantCodesForExport`)와 달리 제외된 행도 화면에서는 계속 보여야 관리자가 토글을 다시 켤 수 있음)
+
+### setParticipantCodeExclusion (신규, 27.5번, decisions.md D-34)
+```ts
+setParticipantCodeExclusion(id: string, excludedFromExport: boolean)
+```
+- 관리자 전용. 대상 `ParticipantCode`의 `excludedFromExport`를 갱신한다
+- 이 설정은 명시적으로 다시 켜기 전까지 영구적으로 유지되며, CSV를 내려받을 때마다 매번 다시 선택하는 것이 아니다
+- `code`/`normalizedName`/`phoneHash` 등 다른 필드는 변경하지 않는다(제외 여부만 다루는 단일 목적 함수)
+
+### recordParticipantCodeExport (신규, 27.5.3번, decisions.md D-34)
+```ts
+recordParticipantCodeExport(exportedCount: number)
+```
+- `listParticipantCodesForExport()`가 CSV로 응답을 실제로 만들어 보내는 시점에만 호출한다(단순 화면 조회/목록 렌더링에서는 호출하지 않음)
+- `ParticipantCodeExportLog`에 `{ exportedAt: now(), exportedCount }` 한 건을 생성한다. "누가" 내려받았는지는 기록하지 않는다(관리자 단일 계정 체제, 27.5.3번 참고)
+
+### listParticipantCodeExportLogs (신규, 27.5.3번, decisions.md D-34)
+```ts
+listParticipantCodeExportLogs(limit?: number)
+```
+- `ParticipantCodeExportLog`를 `exportedAt` 내림차순으로 조회(기본 최근 1건 이상). 관리자 화면(`/admin/participant-codes`)이 최근 내보내기 이력을 보여줄 때 사용한다
 
 ## 20. 동시성 처리
 
@@ -501,6 +583,8 @@ applyMonthlyMembersToBookingDay(bookingDayId)
 - 대기자 자동 승격
 
 동시 예약이 발생해도 예약 가능 인원을 초과하지 않도록 한다.
+
+참여자 코드 발급/재사용(`ensureParticipantCode`/`ensureParticipantCodesBatch`, 27번)은 별도 트랜잭션이 아니라 위 "예약 생성"/"월 멤버 자동 배정" 트랜잭션 안에서 함께 수행된다(예약 생성과 코드 발급이 분리되어 한쪽만 성공하는 상태를 방지).
 
 ## 21. 기술 스택
 
@@ -682,3 +766,59 @@ applyMonthlyMembersToBookingDay(bookingDayId)
 3. **관리자 예약일 상세 페이지(`app/admin/(protected)/booking-days/[id]/page.tsx`)**: "기본 정보" 카드에 "총 입금 예정 금액" 항목을 추가한다. **`CONFIRMED` 상태 예약만 합산**하며(`WAITING`/`CANCELLED` 제외), 이미 결제 확인된 건과 아직 미확인인 건을 구분하지 않고 "이 예약일에 총 얼마가 걷혀야 하는지"를 하나의 합계로 보여준다.
 
 **데이터 흐름**: 금액은 클라이언트에서 계산하지 않는다. 서버(`lookupBookingsByPhone`/`listBookingsForAdmin`)가 이미 계산해둔 `paymentConfirmationRequired`와 `memberType`을 바탕으로 각 예약 DTO에 `paymentAmountDue`(숫자, USD)를 함께 내려주고, 화면은 그 값을 그대로 표시/합산만 한다(19번 `getPaymentAmountDue` 참고). 새 DB 컬럼은 필요 없다(파생 값, 요청 시점 계산 원칙 유지).
+
+## 27. 참여자 영구 식별 코드(QR) 및 CSV 내보내기 (decisions.md D-33~D-35)
+
+### 27.1 목적
+
+이 시스템과는 완전히 별개인, 네트워크 연결이 없는 오프라인 "게임 로테이션 관리 프로그램"이 회원을 식별할 수 있도록, 예약을 신청한 사람 각자에게 영구적인 랜덤 코드를 발급하고 QR 이미지로 내려받을 수 있게 한다. 관리자가 "코드-이름-전화번호" 매핑 목록을 CSV로 내려받아 그 오프라인 프로그램에 별도로 전달하면, 현장에서 QR(코드만 담김)을 스캔했을 때 그 매핑표로 신원을 조회하는 방식이다. 예약 건별 QR 체크인(입장/퇴장, 별도 미병합 브랜치 `feature/member-check-in-out`)과는 목적·데이터 모델이 완전히 다른 별개 기능이다 — 그 기능은 예약(`Booking`) 1건당 QR 1개(`bkg:{bookingId}`)였고, 이번 기능은 "사람" 1명당 영구 코드 1개다.
+
+### 27.2 대상 범위 (확정)
+
+예약을 신청한 **모든 사람**이 대상이다. 연 멤버(`ANNUAL`)/캐주얼(`CASUAL`) 구분이나 연 멤버의 활성/비활성 여부와 무관하다 — 회비를 내는 정회원뿐 아니라 그날 참여하는 모든 사람을 오프라인 프로그램이 식별해야 하기 때문이다(decisions.md D-33). `AnnualMember`에 종속된 코드가 아니다.
+
+### 27.3 코드 발급/재사용 규칙
+
+- 식별 키는 이 시스템이 이미 예약 중복 판정(18번)·연 멤버 판정(4번)에 쓰는 것과 동일한 `normalizedName + phoneHash` 조합이다.
+- 예약 생성(`createBooking`/`adminCreateBooking`/`applyMonthlyMembersToBookingDay`) 시점에, source(`USER`/`ADMIN`/`MONTHLY_MEMBER_AUTO`)와 무관하게 이 신원의 코드가 이미 있으면 재사용하고, 없으면 새로 발급한다(19번 `ensureParticipantCode`/`ensureParticipantCodesBatch` 참고). 예약 상태(`CONFIRMED`/`WAITING`)와도 무관하게 발급된다.
+- 같은 사람이 여러 번 예약해도 항상 같은 코드를 받는다(재발급이 아니라 재사용, "영구 코드" 원칙).
+- 코드는 정보를 담지 않는 순수 랜덤 문자열(12자)이며, 이름/전화번호 등 어떤 개인정보도 코드 자체에서 유추할 수 없다.
+- 이 기능 도입 이전에 이미 존재하던 `Booking`/`AnnualMember` 데이터에도 코드를 소급 발급해야 한다(백필 스크립트, architecture.md 참고) — 그렇지 않으면 매칭 프로그램이 기존 참여자를 식별할 수 없다.
+
+### 27.4 QR 표시/저장
+
+- QR에는 `code` 값만 인코딩한다(이름/전화번호 등 어떤 정보도 담지 않음 — 확정 요구사항).
+- "QR 저장하기" 버튼은 두 공개 화면에 노출한다.
+  1. 예약 신청 완료 화면(`BookingForm`) — 방금 신청한 예약의 `participantCode`로 즉시 QR을 만들어 다운로드할 수 있다.
+  2. "내 예약 조회/취소" 화면(`CancelLookup`) — 전화번호로 조회된 각 예약 건에도 동일하게 노출해, QR을 분실했거나 처음 발급받는 시점(백필 대상자)에도 언제든 다시 받을 수 있게 한다.
+- 두 화면 모두 다국어(D-18) 적용 대상이므로 버튼 텍스트는 `lib/i18n/dictionary.ts`에 ko/en으로 추가한다.
+- 관리자가 대신 등록하는 예약(`AdminBookingsPanel`, `adminCreateBooking`)에서도 코드는 동일하게 발급/재사용되지만, 관리자 화면에 QR 버튼을 노출하지는 않는다(이번 범위 밖, decisions.md D-33 — 관리자는 CSV로 충분).
+- QR 이미지 생성은 클라이언트에서 신규 의존성 `qrcode`(decisions.md D-35)로 처리한다. 별도 서버 API 호출 없이, 이미 응답으로 받은 `code` 문자열을 그 자리에서 이미지로 변환해 다운로드시킨다.
+
+### 27.5 CSV 내보내기 (관리자 전용, decisions.md D-34)
+
+관리자 화면(`/admin/participant-codes`, 신규)은 발급된 참여자 코드 목록(코드/이름/전화번호)을 표로 보여주고, 각 행에 "내보내기 제외" 토글, 화면 상단에 최근 내보내기 이력, "CSV 다운로드" 버튼을 제공한다. 27.5.2(제외 설정) 하나 때문에 이 화면은 순수 조회 전용이 아니게 됐지만, 그 외의 등록/수정/삭제 같은 일반적인 CRUD는 여전히 두지 않는다(YAGNI) — `ParticipantCode`는 예약 생성 시 시스템이 자동으로만 채우는 파생 데이터이기 때문이다.
+
+**27.5.1 CSV 생성 규칙**
+- "CSV 다운로드" 버튼(`GET /api/admin/participant-codes/export`)을 누르면 그 시점 기준으로 CSV를 생성해 내려준다.
+- 컬럼: `코드, 이름, 전화번호` 3개뿐. 아래 27.5.2의 제외 설정 외에는 어떤 필터(활성/비활성, ANNUAL/CASUAL 등)도 적용하지 않는다(27.2와 동일한 전체 대상 원칙).
+- 전화번호는 관리자 열람 목적으로 그 자리에서 복호화해 평문으로 내보낸다(기존 연 멤버/예약자 목록 조회와 동일한 패턴, 17번 "전화번호 저장 방식" 참고).
+- 파일은 UTF-8(BOM 포함, 한글 엑셀 호환)로 인코딩하고, 파일명에 다운로드 시점 날짜(Pacific/Auckland 기준)를 포함한다.
+
+**27.5.2 내보내기 제외 설정 (개정, opt-out 방식)**
+- 기본은 전원 포함이며, 관리자가 화면에서 특정 인원을 골라 CSV에서 제외할 수 있다(opt-in이 아니라 opt-out — 제외하고 싶은 인원만 개별적으로 표시하는 방식).
+- `ParticipantCode.excludedFromExport`(boolean, 기본 `false`)로 저장한다. 관리자가 각 행의 토글을 켜면 `true`로 저장되고, 그 시점부터 다시 토글을 끄기 전까지 **모든 후속 CSV 내보내기에서 계속 제외**된다 — CSV를 받을 때마다 매번 다시 선택하는 일회성 옵션이 아니라 영구 설정이다(오프라인 매칭 프로그램에 주기적으로 재내보내기할 상황을 가정).
+- 관리자 화면의 참여자 목록에는 제외 설정된 행도 계속 표시된다(배지 등으로 "내보내기 제외" 상태를 표시). 그래야 관리자가 나중에 토글을 다시 켤 수 있다 — `listParticipantCodesForExport`(CSV용, 제외 대상 필터링)와 `listParticipantCodesForAdmin`(화면용, 전체 표시)를 별도 함수로 분리하는 이유다(19번 참고).
+- 토글 변경은 `PATCH /api/admin/participant-codes/[id]`(body: `{ excludedFromExport: boolean }`)로 즉시 저장된다(이 프로젝트의 기존 PATCH 패턴 — 연 멤버 활성/비활성 토글 등 — 과 일관).
+
+**27.5.3 내보내기 이력 (신규)**
+- CSV를 실제로 생성해 응답한 시점마다(즉 `GET /api/admin/participant-codes/export`가 정상 처리될 때마다) 이력을 한 건 기록한다 — 다운로드 버튼을 누르지 않은 조회/화면 방문은 기록하지 않는다.
+- 기록 항목: 내보낸 시각(Pacific/Auckland 기준 표시), 그 시점에 내보낸 인원 수(제외 설정 반영 후 실제 CSV에 담긴 행 수). "누가" 내려받았는지는 기록하지 않는다 — 관리자는 공유 비밀번호를 쓰는 단일 계정 체제라 개인 식별이 의미가 없다(2번 "관리자" 정의 참고).
+- 관리자 화면(`/admin/participant-codes`)에 최근 내보내기 이력을 보여준다(예: "최근 내보내기: 2026-08-15 14:32 (312명)"). 여러 건을 목록으로 보여줄지 최신 1건만 보여줄지는 화면 레이아웃에 맞게 구현하되, 최소한 "가장 최근 1건"은 항상 확인할 수 있어야 한다.
+- 이력은 삭제/정리 기능 없이 계속 누적한다(YAGNI — 발생 빈도가 낮아 저장량 문제가 되지 않음, D-32의 결제 증빙 이미지처럼 용량이 큰 데이터가 아니다).
+
+### 27.6 예약 신청 폼 입력 UX 개선
+
+이번 기능과 별개로 함께 요청된 개선사항이며, 데이터 정합성 문제가 아니라 순수 UI 개선이다(전화번호는 이미 저장 전 항상 숫자만 남기도록 정규화되고 있었음, decisions.md D-06 정규화 규칙 참고 — 기존 데이터에 대한 별도 재정규화 마이그레이션은 필요 없다).
+- 예약 신청 폼(`BookingForm`)의 전화번호 입력칸에 저장 형식 안내를 `placeholder="0212345678"`로 표시한다.
+- 이름 입력칸에 `autoComplete="name"`, 전화번호 입력칸에 `autoComplete="tel"`을 지정해 브라우저 자동완성을 지원한다.

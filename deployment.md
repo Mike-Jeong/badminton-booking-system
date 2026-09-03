@@ -66,6 +66,7 @@
 - libSQL은 HTTP로 연결하는 구조라 `prisma migrate dev`/`deploy`를 원격 Turso DB에 직접 쓸 수 없다. 로컬에서 `prisma migrate diff`로 마이그레이션 SQL을 생성한 뒤, Turso CLI(`turso db shell` 등)로 원격 DB에 적용하는 방식을 사용한다.
 - 로컬 개발 시에는 파일 기반 SQLite(`file:./dev.db`)로 개발하고, 배포 대상(Turso)에는 위 방식으로 스키마를 반영하는 것을 권장한다.
 - `PII_SECRET_KEY`를 교체(rotate)하는 경우, 기존 `phoneHash`/`phoneEncrypted` 데이터를 새 키로 재계산하는 일회성 스크립트가 필요하다(사고 발생 시에만 작성, 평상시엔 불필요).
+- 참여자 코드 기능(`ParticipantCode`, requirements.md 27번, decisions.md D-33) 배포 시, 스키마 마이그레이션 적용 후 `scripts/backfill-participant-codes.ts`를 1회 수동 실행해야 한다. 이 기능 도입 이전에 이미 쌓인 `Booking`/`AnnualMember` 데이터에도 코드를 소급 발급하기 위함이며, 실행 전까지는 과거 예약자가 "내 예약 조회" 화면에서 QR을 받을 수 없다(향후 재예약 시에는 자동으로 발급되므로 영구히 막히는 것은 아님). 실행 환경(로컬/Vercel 임시 셸 등)에 `PII_SECRET_KEY`와 DB 연결 환경변수(`TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN` 또는 로컬 SQLite 경로)가 설정되어 있어야 한다. 멱등성이 있어 재실행해도 안전하다.
 
 ---
 
