@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useLocale } from "@/lib/i18n/LanguageContext";
 import { dictionary, translateApiErrorMessage } from "@/lib/i18n/dictionary";
+import { ParticipantQrButton } from "@/components/public/ParticipantQrButton";
 
 export function BookingForm({ bookingDayId, ended = false }: { bookingDayId: string; ended?: boolean }) {
   const router = useRouter();
@@ -17,12 +18,16 @@ export function BookingForm({ bookingDayId, ended = false }: { bookingDayId: str
   const [phone, setPhone] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<"CONFIRMED" | "WAITING" | null>(null);
+  // 방금 신청한 예약의 참여자 영구 식별 코드(requirements.md 27.4번). 백필 전 과도기 등으로
+  // 값이 없으면 QR 버튼을 노출하지 않는다(architecture.md 4장 방어적 처리).
+  const [participantCode, setParticipantCode] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError(null);
     setResult(null);
+    setParticipantCode(null);
     setLoading(true);
     try {
       const res = await fetch("/api/bookings", {
@@ -36,6 +41,7 @@ export function BookingForm({ bookingDayId, ended = false }: { bookingDayId: str
         return;
       }
       setResult(json.data.status);
+      setParticipantCode(typeof json.data.participantCode === "string" ? json.data.participantCode : null);
       setName("");
       setPhone("");
       router.refresh();
@@ -68,7 +74,13 @@ export function BookingForm({ bookingDayId, ended = false }: { bookingDayId: str
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="booking-name">{t.name}</Label>
-            <Input id="booking-name" value={name} onChange={(e) => setName(e.target.value)} required />
+            <Input
+              id="booking-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              autoComplete="name"
+              required
+            />
           </div>
           <div className="space-y-2">
             <Label htmlFor="booking-phone">{t.phone}</Label>
@@ -77,6 +89,8 @@ export function BookingForm({ bookingDayId, ended = false }: { bookingDayId: str
               type="tel"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
+              placeholder={t.phonePlaceholder}
+              autoComplete="tel"
               required
             />
           </div>
@@ -90,6 +104,12 @@ export function BookingForm({ bookingDayId, ended = false }: { bookingDayId: str
             <p aria-live="polite" className="text-sm font-medium text-muted-foreground">
               {t.resultWaiting}
             </p>
+          )}
+          {result && participantCode && (
+            <div className="space-y-1 rounded-md border p-3">
+              <p className="text-sm text-muted-foreground">{t.qrGuide}</p>
+              <ParticipantQrButton code={participantCode} size="sm" />
+            </div>
           )}
           {error && (
             <p role="alert" aria-live="assertive" className="text-sm text-destructive">

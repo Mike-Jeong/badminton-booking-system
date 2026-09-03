@@ -52,6 +52,14 @@ export const dictionary = {
       submitting: "신청 중...",
       submit: "예약 신청",
       endedMessage: "이 예약일은 이미 종료되어 더 이상 신청할 수 없습니다.",
+      phonePlaceholder: "0212345678",
+      qrGuide: "현장 게임 배정에 사용되는 내 QR입니다. 저장해두고 다음에도 사용하세요.",
+    },
+    // 참여자 영구 식별 코드 QR(requirements.md 27.4번) — 예약 완료/내 예약 조회 양쪽에서 공용
+    qr: {
+      save: "QR 저장하기",
+      saving: "저장 중...",
+      downloadError: "QR 이미지를 만들지 못했습니다.",
     },
     lookup: {
       heading: "내 예약 조회/취소",
@@ -136,6 +144,13 @@ export const dictionary = {
       submitting: "Submitting...",
       submit: "Apply",
       endedMessage: "This session has already ended and is no longer accepting applications.",
+      phonePlaceholder: "0212345678",
+      qrGuide: "This is your QR code for on-site game assignment. Save it and reuse it next time.",
+    },
+    qr: {
+      save: "Save QR",
+      saving: "Saving...",
+      downloadError: "Failed to generate the QR image.",
     },
     lookup: {
       heading: "My Bookings",

@@ -18,6 +18,7 @@ import { formatDateOnlyInTimeZone, getTodayDateOnlyInTimeZone, isBookingDayEnded
 import { useLocale } from "@/lib/i18n/LanguageContext";
 import { dictionary, translateApiErrorMessage } from "@/lib/i18n/dictionary";
 import { compressImageFile } from "@/lib/imageCompression";
+import { ParticipantQrButton } from "@/components/public/ParticipantQrButton";
 
 interface LookupBooking {
   id: string;
@@ -25,6 +26,8 @@ interface LookupBooking {
   status: "WAITING" | "CONFIRMED" | "CANCELLED";
   createdAt: string;
   cancelledAt: string | null;
+  /** 참여자 영구 식별 코드(requirements.md 27.4번). 백필 전 과도기에는 null일 수 있다. */
+  participantCode: string | null;
   bookingDay: { id: string; date: string; label: string | null; location: string; endTime: string };
   paymentConfirmationRequired: boolean;
   paymentConfirmed: boolean;
@@ -331,26 +334,31 @@ export function CancelLookup() {
                       )}
                     </TableCell>
                     <TableCell>
-                      {b.status !== "CANCELLED" &&
-                        (isBookingDayEnded(new Date(b.bookingDay.date), b.bookingDay.endTime) ? (
-                          <p className="text-xs text-muted-foreground">{t.endedNote}</p>
-                        ) : (
-                          <div className="space-y-1">
-                            <Button
-                              variant="destructive"
-                              size="sm"
-                              disabled={cancellingId === b.id}
-                              onClick={() => handleCancel(b.id)}
-                            >
-                              {cancellingId === b.id ? t.cancelling : t.cancel}
-                            </Button>
-                            {rowError[b.id] && (
-                              <p role="alert" aria-live="assertive" className="text-xs text-destructive">
-                                {rowError[b.id]}
-                              </p>
-                            )}
-                          </div>
-                        ))}
+                      <div className="space-y-2">
+                        {/* 참여자 영구 식별 코드 QR(requirements.md 27.4번). 코드가 없으면(백필 전
+                            과도기) 버튼 자체를 숨긴다. 취소된 예약에도 코드는 사람에 귀속되므로 노출한다. */}
+                        {b.participantCode && <ParticipantQrButton code={b.participantCode} size="sm" />}
+                        {b.status !== "CANCELLED" &&
+                          (isBookingDayEnded(new Date(b.bookingDay.date), b.bookingDay.endTime) ? (
+                            <p className="text-xs text-muted-foreground">{t.endedNote}</p>
+                          ) : (
+                            <div className="space-y-1">
+                              <Button
+                                variant="destructive"
+                                size="sm"
+                                disabled={cancellingId === b.id}
+                                onClick={() => handleCancel(b.id)}
+                              >
+                                {cancellingId === b.id ? t.cancelling : t.cancel}
+                              </Button>
+                              {rowError[b.id] && (
+                                <p role="alert" aria-live="assertive" className="text-xs text-destructive">
+                                  {rowError[b.id]}
+                                </p>
+                              )}
+                            </div>
+                          ))}
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
