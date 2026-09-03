@@ -125,6 +125,29 @@ export function formatDateOnlyInTimeZone(date: Date): string {
 }
 
 /**
+ * 주어진 UTC 시각(Date)을 Pacific/Auckland 기준 "YYYY-MM-DD HH:mm" 문자열로 변환한다.
+ * 이벤트가 실제로 발생한 시각(예: 참여자 코드 CSV 내보내기 이력, requirements.md 27.5.3번)을
+ * 화면에 표시할 때 사용한다.
+ */
+export function formatDateTimeInTimeZone(date: Date): string {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: AUCKLAND_TIME_ZONE,
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const map: Record<string, string> = {};
+  for (const part of formatter.formatToParts(date)) {
+    map[part.type] = part.value;
+  }
+  const hour = map.hour === "24" ? "00" : map.hour;
+  return `${map.year}-${map.month}-${map.day} ${hour}:${map.minute}`;
+}
+
+/**
  * 주어진 시각(Date)의 Pacific/Auckland 기준 요일을 반환한다.
  * 0=일, 1=월, 2=화, 3=수, 4=목, 5=금, 6=토 (JS Date.getDay() 규칙과 동일)
  */
