@@ -382,7 +382,7 @@ PaymentProof {
 
 ParticipantCode {
   id
-  name                 // 표시용, 정규화된 이름을 최신 값으로 유지(예약할 때마다 갱신)
+  name                 // 표시용, 생성 시점의 정규화된 이름으로 고정(신원 키의 일부라 이후 갱신되지 않음)
   normalizedName
   phoneHash            // HMAC-SHA256(정규화된 전화번호) — Booking/AnnualMember와 동일한 신원 키(27번, decisions.md D-33)
   phoneEncrypted       // AES-256-GCM(정규화된 전화번호) — CSV 내보내기(27.5번) 시에만 복호화
@@ -524,7 +524,7 @@ ensureParticipantCode(name: string, phone: string)
 ```
 - 이름/전화번호 정규화 → `phoneHash` 계산
 - `normalizedName + phoneHash` 조합으로 기존 `ParticipantCode` 조회
-- 있으면: 표시용 `name`이 최신 정규화 이름과 다르면 갱신, `code`는 그대로 반환(재발급하지 않음). `phoneEncrypted`는 재암호화하지 않는다(phoneHash가 이미 일치하므로 평문 값이 동일함이 보장됨)
+- 있으면: 기존 행을 그대로 반환(재발급하지 않음), 어떤 필드도 갱신하지 않는다. `name`은 신원 키(`normalizedName`)의 일부와 항상 같은 값으로만 생성되므로 갱신할 대상 자체가 없고, `phoneEncrypted`도 재암호화하지 않는다(phoneHash가 이미 일치하므로 평문 값이 동일함이 보장됨)
 - 없으면: 12자 랜덤 문자열(`code`)을 생성해 새로 등록 후 반환. 동시 요청으로 인한 유니크 충돌(같은 신원이 동시에 두 트랜잭션에서 최초 생성 시도) 발생 시 재조회해 기존 값을 반환한다
 - `createBooking`/`adminCreateBooking`(단건 예약 생성 경로) 내부에서 예약 생성과 같은 트랜잭션으로 호출되며, 반환된 `code`는 `participantCode` 필드로 예약 응답 DTO에 포함된다
 
@@ -534,7 +534,7 @@ ensureParticipantCodesBatch(participants: { name: string; phone: string }[])
 ```
 - `applyMonthlyMembersToBookingDay`(월 멤버 자동 배정)처럼 여러 명을 한 번에 처리하는 경로에서 N+1 쿼리를 피하기 위한 배치 버전(`batchComputePaymentConfirmationRequirements`와 동일한 이유, 19번 참고)
 - 대상 전체의 `normalizedName + phoneHash` 조합을 한 번의 조회로 기존 등록 여부를 확인하고, 없는 조합만 모아 한 번의 `createMany`로 코드를 발급한다
-- 성능을 위해 표시용 `name` 갱신은 이 배치 경로에서는 수행하지 않는다(단건 경로에서 그 사람이 직접 예약할 때 자연스럽게 갱신됨). 코드 재사용 자체에는 영향 없음
+- 단건 경로(`ensureParticipantCode`)와 동일하게 기존 행은 갱신 없이 그대로 재사용한다
 - 반환값은 호출자가 사용하지 않는다(코드 발급/재사용 자체가 목적)
 
 ### listParticipantCodesForExport (신규, 27.5번, decisions.md D-34)

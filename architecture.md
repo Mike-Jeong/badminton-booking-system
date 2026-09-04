@@ -214,14 +214,14 @@ vercel.json                    # crons 설정 (신규, deployment.md 참고)
 - `ensureParticipantCode(name, phone, client = prisma)`:
   1. `normalizeName`/`normalizePhone`으로 정규화 후 `hashPhone`으로 `phoneHash` 계산.
   2. `client.participantCode.findUnique({ where: { normalizedName_phoneHash: { normalizedName, phoneHash } } })`로 기존 레코드 조회.
-  3. 있으면: `existing.name !== normalizedName`일 때만 `name` 필드를 최신 정규화 이름으로 갱신(`phoneEncrypted`는 재암호화하지 않음 — `phoneHash` 일치로 평문 값이 이미 동일함이 보장되므로). `{ code: existing.code, id: existing.id }` 반환.
+  3. 있으면: 기존 행을 갱신 없이 그대로 반환(`{ code: existing.code, id: existing.id }`). `name`은 신원 키(`normalizedName`)와 항상 같은 값으로만 생성되므로 갱신할 필요 자체가 없고, `phoneEncrypted`도 재암호화하지 않는다(`phoneHash` 일치로 평문 값이 이미 동일함이 보장되므로).
   4. 없으면: `code = generateParticipantCode()`로 `client.participantCode.create({ data: { name: normalizedName, normalizedName, phoneHash, phoneEncrypted: encryptPhone(normalizedPhone), code } })` 시도. Prisma 유니크 제약 위반 에러(`P2002`, 동시 요청으로 인한 레이스)를 잡으면 다시 2번 조회로 폴백해 기존 값을 반환하고, 그 외 에러는 그대로 던진다.
   5. `createBooking`/`adminCreateBooking`이 예약 생성과 **같은 트랜잭션**(`tx`) 안에서 이 함수를 호출하고, 반환된 `code`를 예약 응답 DTO에 `participantCode` 필드로 병합한다. `lookupBookingsByPhone`도 각 예약의 `normalizedName`(같은 조회 내에서는 `phoneHash`가 공통이므로 이름만 다르면 됨)로 배치 조회해 `participantCode`를 함께 내려준다(N+1 회피, `batchComputePaymentConfirmationRequirements`와 동일한 패턴).
 - `ensureParticipantCodesBatch(participants: { name, phone }[], client)`: `applyMonthlyMembersToBookingDay`(월 멤버 자동 배정, 다건 처리) 전용 배치 버전.
   1. 각 참여자의 `normalizedName`/`phoneHash`를 계산하고 동일 신원 중복을 배치 내에서 먼저 제거.
   2. `client.participantCode.findMany({ where: { OR: pairs.map(p => ({ normalizedName: p.normalizedName, phoneHash: p.phoneHash })) } })`로 기존 등록 여부를 1회 조회.
   3. 없는 조합만 모아 `client.participantCode.createMany({ data: [...] })`로 1회에 생성(각 행에 새 `code` 발급).
-  4. 표시용 `name` 갱신은 **수행하지 않는다**(월 멤버 수와 무관하게 쿼리 수를 O(1)로 유지하기 위한 의도적 트레이드오프 — `MonthlyMemberService.applyMonthlyMembersToBookingDay`가 이미 같은 이유로 O(N) 순차 쿼리를 O(1) 배치로 바꾼 전례와 동일한 성능 원칙, 이 섹션의 `MonthlyMemberService` 항목 참고). 해당 인물이 나중에 직접 예약(단건 경로)하면 그때 자연스럽게 갱신된다.
+  4. 기존 행은 단건 경로와 동일하게 갱신 없이 그대로 둔다 — `name`이 신원 키의 일부라 애초에 갱신할 대상이 없다.
   5. 반환값은 호출자가 쓰지 않는다(코드 발급/재사용 자체가 목적). `applyMonthlyMembersToBookingDay`가 대상 월 멤버 목록을 이미 로드한 시점에 같은 트랜잭션에서 호출한다.
 - `listParticipantCodesForExport()`: `prisma.participantCode.findMany({ where: { excludedFromExport: false }, orderBy: { name: "asc" } })` 후 각 행을 `{ code, name, phone: decryptPhone(phoneEncrypted) }`로 매핑해 반환. 관리자 CSV 내보내기(`GET /api/admin/participant-codes/export`)에서만 호출한다(decisions.md D-34 개정 1 — `excludedFromExport=true`인 행만 걸러내고, 그 외 필터는 없음).
 - `listParticipantCodesForAdmin()`: `prisma.participantCode.findMany({ orderBy: { name: "asc" } })`(제외 필터 없이 전체) 후 각 행을 `{ id, code, name, phone: decryptPhone(phoneEncrypted), excludedFromExport }`로 매핑해 반환. 관리자 화면(`/admin/participant-codes`)의 목록 테이블 렌더링 전용 — `listParticipantCodesForExport`와 달리 `id`와 `excludedFromExport`를 포함해 토글 UI가 현재 상태를 표시하고 대상을 특정할 수 있게 한다.
@@ -417,7 +417,7 @@ model PaymentProof {
 // 신원 키(normalizedName+phoneHash)는 Booking의 중복 예약 판정(18번)과 동일한 정의를 재사용한다.
 model ParticipantCode {
   id                 String   @id @default(cuid())
-  name               String   // 표시용, 정규화된 이름을 최신 값으로 유지(예약할 때마다 갱신, 배치 경로는 예외)
+  name               String   // 표시용, 생성 시점의 정규화된 이름으로 고정(신원 키의 일부라 이후 갱신되지 않음)
   normalizedName     String
   phoneHash          String   // HMAC-SHA256(normalizedPhone) — Booking/AnnualMember와 동일한 조회용 해시
   phoneEncrypted     String   // AES-256-GCM(normalizedPhone) — CSV 내보내기(27.5번) 시에만 복호화

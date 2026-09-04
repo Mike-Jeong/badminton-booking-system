@@ -48,7 +48,9 @@ export interface EnsureParticipantCodeResult {
  * (requirements.md 27.3번). createBooking/adminCreateBooking이 예약 생성과 같은 트랜잭션 안에서
  * 호출하며, 반환된 code를 예약 응답 DTO에 participantCode로 병합한다.
  *
- * 이미 있는 경우 표시용 name만 최신 정규화 이름으로 갱신한다. phoneEncrypted는 재암호화하지
+ * 이미 있는 경우 기존 행을 그대로 재사용하며 어떤 필드도 갱신하지 않는다 — name은 신원 키인
+ * normalizedName과 항상 같은 값으로만 생성되므로, 조회에 쓴 normalizedName과 달라지는 경우 자체가
+ * 없다(이름이 바뀌면 신원 키가 달라져 다른 행으로 취급된다). phoneEncrypted도 재암호화하지
  * 않는다 — phoneHash가 일치한 시점에 평문 값이 이미 동일함이 보장되고, AES-GCM은 매번 다른 IV로
  * 암호문이 달라져 재암호화 여부를 암호문 비교로 판단할 수도 없다(decisions.md D-33).
  * excludedFromExport 등 관리자가 설정한 값은 절대 건드리지 않는다(D-34 개정 1).
@@ -72,12 +74,6 @@ export async function ensureParticipantCode(
     where: { normalizedName_phoneHash: { normalizedName, phoneHash } },
   });
   if (existing) {
-    if (existing.name !== normalizedName) {
-      await client.participantCode.update({
-        where: { id: existing.id },
-        data: { name: normalizedName },
-      });
-    }
     return { id: existing.id, code: existing.code };
   }
 
@@ -117,8 +113,8 @@ export interface ParticipantForCode {
  * 쿼리 수를 O(1)로 유지한다(멤버마다 순차 조회/생성하면 원격 DB 왕복이 누적돼 트랜잭션
  * 타임아웃에 걸렸던 전례가 있다 — monthlyMemberService.ts 주석 참고).
  *
- * 표시용 name 갱신은 수행하지 않는다(위 성능 이유의 의도적 트레이드오프, architecture.md 2장).
- * 해당 인물이 나중에 직접 예약하면 단건 경로(ensureParticipantCode)에서 자연스럽게 갱신된다.
+ * 기존 행은 갱신 없이 그대로 둔다(ensureParticipantCode와 동일 — name은 신원 키의 일부라
+ * 애초에 달라질 수 없다).
  */
 export async function ensureParticipantCodesBatch(
   participants: ParticipantForCode[],
