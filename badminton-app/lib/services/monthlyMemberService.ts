@@ -16,6 +16,7 @@ import { ValidationError, NotFoundError, ConflictError } from "@/lib/errors";
 import { formatDateOnlyInTimeZone, isBookingDayEnded } from "@/lib/timezone";
 import { decryptPhone } from "@/lib/security/phoneCrypto";
 import type { PrismaClientOrTx } from "@/lib/services/annualMemberService";
+import { ensureParticipantCodesBatch } from "@/lib/services/participantCodeService";
 
 /**
  * 트랜잭션 안에서 월 멤버를 순회하며 매번 조회/생성 쿼리를 날리면(N+1), 월 멤버 수가 많을 때
@@ -391,6 +392,18 @@ async function applyMonthlyMembersToBookingDayCore(
   if (toCreate.length > 0) {
     await tx.booking.createMany({ data: toCreate });
   }
+
+  // 참여자 영구 식별 코드 발급/재사용(requirements.md 27.3번, decisions.md D-33). 이 경로도
+  // 예외 없이 대상이며(source=MONTHLY_MEMBER_AUTO), 위와 같은 이유로 배치 함수를 써서 쿼리 수를
+  // 멤버 수와 무관하게 유지한다. 이미 예약이 있어 스킵된 멤버도 신원 자체는 동일하므로 대상 전원을
+  // 넘긴다(이미 코드가 있으면 재사용되어 아무 일도 일어나지 않는다).
+  await ensureParticipantCodesBatch(
+    monthlyMembers.map((mm) => ({
+      name: mm.annualMember.normalizedName,
+      phone: decryptPhone(mm.annualMember.phoneEncrypted),
+    })),
+    tx
+  );
 
   return { createdCount: toCreate.length, skippedCount };
 }

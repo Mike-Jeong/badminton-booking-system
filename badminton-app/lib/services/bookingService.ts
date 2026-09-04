@@ -18,6 +18,7 @@ import {
   batchComputePaymentConfirmationRequirements,
   getPaymentAmountDue,
 } from "@/lib/services/paymentProofService";
+import { ensureParticipantCode } from "@/lib/services/participantCodeService";
 
 export interface CreateBookingInput {
   bookingDayId: string;
@@ -26,8 +27,12 @@ export interface CreateBookingInput {
   source: BookingSource;
 }
 
-/** 서비스가 외부로 반환하는 예약 정보. phoneHash/phoneEncrypted/normalizedName은 절대 포함하지 않는다. */
-function toBookingDTO(booking: Booking) {
+/**
+ * 서비스가 외부로 반환하는 예약 정보. phoneHash/phoneEncrypted/normalizedName은 절대 포함하지 않는다.
+ * participantCode(requirements.md 27번)는 예약 생성 경로에서만 함께 내려주며, 그 외 경로(취소 등)에서는
+ * 굳이 조회하지 않는다(해당 화면이 사용하지 않는 값이므로 불필요한 쿼리를 늘리지 않는다).
+ */
+function toBookingDTO(booking: Booking, participantCode?: string) {
   return {
     id: booking.id,
     bookingDayId: booking.bookingDayId,
@@ -39,6 +44,7 @@ function toBookingDTO(booking: Booking) {
     createdAt: booking.createdAt,
     updatedAt: booking.updatedAt,
     cancelledAt: booking.cancelledAt,
+    ...(participantCode !== undefined ? { participantCode } : {}),
   };
 }
 
@@ -147,7 +153,7 @@ async function createBookingCore(
     status = "WAITING";
   }
 
-  return tx.booking.create({
+  const booking = await tx.booking.create({
     data: {
       bookingDayId: input.bookingDayId,
       name: normalizedName,
@@ -160,6 +166,17 @@ async function createBookingCore(
       source: input.source,
     },
   });
+
+  // 참여자 영구 식별 코드 발급/재사용(requirements.md 27.3번, decisions.md D-33).
+  // source/memberType/status와 무관하게 항상 수행하며, 예약 생성과 같은 트랜잭션 안에서
+  // 처리해 한쪽만 성공하는 상태를 만들지 않는다(architecture.md 7장).
+  const { code: participantCode } = await ensureParticipantCode(
+    normalizedName,
+    normalizedPhone,
+    tx
+  );
+
+  return { booking, participantCode };
 }
 
 /**
@@ -169,10 +186,10 @@ async function createBookingCore(
  * - 슬롯 여유 있으면 CONFIRMED, 없으면 WAITING (자동 슬롯 확장 없음 — 관리자 액션 전용, D-14)
  */
 export async function createBooking(input: CreateBookingInput) {
-  const created = await prisma.$transaction((tx) =>
+  const { booking, participantCode } = await prisma.$transaction((tx) =>
     createBookingCore(tx, input, { autoExpandSlot: false })
   );
-  return toBookingDTO(created);
+  return toBookingDTO(booking, participantCode);
 }
 
 /**
@@ -193,6 +210,7 @@ export async function lookupBookingsByPhone(phone: string) {
     select: {
       id: true,
       name: true,
+      normalizedName: true,
       status: true,
       createdAt: true,
       cancelledAt: true,
@@ -216,6 +234,19 @@ export async function lookupBookingsByPhone(phone: string) {
     }))
   );
 
+  // 참여자 코드는 (normalizedName + phoneHash) 조합에 귀속된다. 이 조회는 phoneHash가 공통이므로
+  // 등장하는 normalizedName만 모아 1회 조회하면 된다(N+1 회피,
+  // batchComputePaymentConfirmationRequirements와 동일한 패턴). 백필 스크립트 실행 전 과도기에는
+  // 매칭되는 코드가 없을 수 있어 그 경우 null을 내려주고, 클라이언트는 QR 버튼을 숨긴다.
+  const participantCodes = await prisma.participantCode.findMany({
+    where: {
+      phoneHash,
+      normalizedName: { in: Array.from(new Set(bookings.map((b) => b.normalizedName))) },
+    },
+    select: { normalizedName: true, code: true },
+  });
+  const participantCodeMap = new Map(participantCodes.map((p) => [p.normalizedName, p.code]));
+
   return bookings.map((b) => {
     const paymentConfirmationRequired = requirementMap.get(b.id) ?? true;
     return {
@@ -224,6 +255,7 @@ export async function lookupBookingsByPhone(phone: string) {
       status: b.status,
       createdAt: b.createdAt,
       cancelledAt: b.cancelledAt,
+      participantCode: participantCodeMap.get(b.normalizedName) ?? null,
       bookingDay: {
         id: b.bookingDay.id,
         date: b.bookingDay.date,
@@ -305,10 +337,10 @@ export async function adminCancelBooking(bookingId: string) {
  * 슬롯이 부족하면 WAITING이 아니라 슬롯을 자동으로 늘려 항상 CONFIRMED로 생성한다(D-14).
  */
 export async function adminCreateBooking(bookingDayId: string, name: string, phone: string) {
-  const created = await prisma.$transaction((tx) =>
+  const { booking, participantCode } = await prisma.$transaction((tx) =>
     createBookingCore(tx, { bookingDayId, name, phone, source: "ADMIN" }, { autoExpandSlot: true })
   );
-  return toBookingDTO(created);
+  return toBookingDTO(booking, participantCode);
 }
 
 /**

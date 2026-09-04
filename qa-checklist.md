@@ -198,6 +198,55 @@
 
 ---
 
+## 10-3. 참여자 코드(QR) 및 CSV 내보내기 (decisions.md D-33~D-35, requirements.md §27) — 검증 완료 2026-09-03
+
+**발급 대상/재사용**
+- [x] 캐주얼(`CASUAL`)로 판정되는 예약을 신청해도(연 멤버로 등록되지 않은 이름+전화번호) 예약 완료 응답에 `participantCode`가 포함된다 — 연 멤버 여부와 무관하게 모든 예약자가 코드를 받는지 확인(decisions.md D-33, AnnualMember 미종속). `POST /api/bookings`로 `memberType:"CASUAL"` 응답에 `participantCode` 포함 확인.
+- [x] 같은 이름+전화번호로 서로 다른 날짜에 두 번 예약해도 두 예약의 `participantCode`가 동일하다(재발급이 아니라 재사용). 서로 다른 예약일 2건에서 동일 코드 확인. 전화번호를 `0211112222` / `021-111-2222`처럼 다른 표기로 넣어도(D-06 정규화) 같은 코드가 재사용됨을 함께 확인. 취소(`POST /api/bookings/[id]/cancel`) 후 같은 신원으로 재예약해도 동일 코드가 유지됨을 확인(D-08 재예약 시 코드 불변).
+- [x] 같은 전화번호로 이름을 다르게(예: 부모가 자녀 두 명 이름으로) 예약하면 각각 다른 `participantCode`가 발급된다(식별 키가 `normalizedName+phoneHash` 조합이므로). 동일 전화번호 + 다른 이름 2건이 서로 다른 코드를 받고, `POST /api/bookings/lookup`에서도 각 예약 행에 자기 이름에 맞는 코드가 매핑되어 내려옴을 확인.
+- [x] 관리자가 수동으로 예약을 추가(`adminCreateBooking`, source=ADMIN)해도 해당 신원의 `participantCode`가 정상적으로 발급/재사용된다. `POST /api/admin/bookings` 응답에 `participantCode` 포함 + SQLite `ParticipantCode` 테이블에서 직접 확인.
+- [x] 월 멤버 자동 배정(`applyMonthlyMembersToBookingDay`)으로 생성된 예약의 대상 연 멤버들도 `ParticipantCode`가 배치로 발급된다. 월 멤버 8명이 등록된 요일로 예약일을 생성해 자동 배정(`createdCount:8`)한 결과, 같은 요청 안에서 코드 8건이 한 번에 생성됨을 DB로 확인. 자동 배정을 재실행(`POST /api/admin/booking-days/[id]/apply-monthly-members`, `createdCount:0`)해도 코드가 중복 생성되지 않았고, 그 멤버가 나중에 직접 예약하면 배치로 발급됐던 것과 동일한 코드가 재사용됐다.
+- [x] 같은 신원으로 동시에 두 번 예약을 시도해도(레이스 컨디션) `ParticipantCode`가 중복 생성되지 않고 하나로 수렴한다. 동일 신원으로 서로 다른 예약일에 동시 POST 2건을 보내 두 응답 모두 같은 코드를 받고 DB에는 1행만 생성됨을 확인(P2002 유니크 충돌 시 기존 행을 재조회해 재사용하는 처리도 코드 확인).
+
+**QR 저장**
+- [x] 예약 신청 완료 화면(`BookingForm`)에 "QR 저장하기" 버튼이 뜨고, 클릭 시 이미지 파일(PNG)이 다운로드된다. QR을 디코딩하면 예약 응답의 `participantCode` 값과 정확히 일치하고, 그 외 이름/전화번호 등 어떤 정보도 포함되어 있지 않다. 브라우저에서 실제로 예약 신청 후 버튼 클릭 → `download="participant-qr-<code>.png"` + `data:image/png;base64,...` 앵커가 트리거됨을 확인. 다운로드된 PNG를 캔버스로 다시 읽어 25×25 모듈 격자(21 모듈 + margin 2)를 추출하고, Node에서 `QRCode.create(code)`로 만든 격자와 SHA-256이 완전히 일치함을 확인(다른 페이로드로 만든 격자는 해시가 달라짐 — 즉 코드 문자열 단독만 인코딩되어 있음).
+- [x] "내 예약 조회/취소" 화면(`CancelLookup`)에서도 전화번호로 조회한 각 예약 건에 "QR 저장하기" 버튼이 뜨고, 다운로드된 QR이 예약 완료 화면에서 받은 것과 동일한 코드를 담고 있다(같은 신원이면 항상 같은 코드). 조회 결과 5건(동일 전화번호·이름 2종, 취소된 건 포함)에서 행별 버튼 클릭 시 각각 자기 신원의 코드로 파일명이 생성됨을 확인. 취소된 예약 행에도 QR 버튼이 노출된다(코드는 "예약"이 아니라 "사람"에 귀속되므로 의도된 동작, `CancelLookup.tsx` 주석과 일치).
+- [x] 공개 화면의 QR 관련 버튼/문구가 한국어/영어 전환(D-18) 시 모두 정상 표시된다("QR 저장하기" ↔ "Save QR", 예약 완료 안내 문구 ko/en 모두 사전에 존재).
+- [x] `qrcode` 패키지가 정적 임포트가 아니라 클릭 시점에 동적 임포트되어, QR 버튼을 누르지 않는 페이지 로드에서는 초기 JS 번들에 큰 변화가 없는지 확인. `ParticipantQrButton.tsx`가 `await import("qrcode")` 형태이고, `npm run build` 산출물에서 `/lookup` 2.85kB(First Load 120kB), `/booking-days/[id]` 1.92kB(122kB)로 공유 청크(102kB)에 qrcode가 포함되지 않음을 확인.
+
+**CSV 내보내기 (관리자)**
+- [x] `/admin/participant-codes` 화면에 발급된 `ParticipantCode` 총 건수가 실제 DB 건수와 일치하게 표시된다("총 40건 발급 · 내보내기 대상 40건 (제외 0건)"이 `SELECT COUNT(*) FROM ParticipantCode`와 일치).
+- [x] "CSV 다운로드" 클릭 시 `코드,이름,전화번호` 3개 컬럼의 CSV 파일이 다운로드되고, 한글 이름이 Excel/스프레드시트에서 깨지지 않는다(UTF-8 BOM 확인). 응답 선두 3바이트가 `EF BB BF`, 헤더 `코드,이름,전화번호`, `Content-Type: text/csv; charset=utf-8`, `Content-Disposition: attachment; filename="participant-codes-20260903.csv"`(Pacific/Auckland 기준 날짜) 확인. 이름에 쉼표·큰따옴표가 들어간 경우도 RFC 4180대로 이스케이프되어(`"QAQR""쉼표,따옴표"`) 표준 CSV 파서로 3컬럼 그대로 복원됨을 확인.
+- [x] CASUAL로 예약한 사람과 ANNUAL(활성/비활성 무관)로 등록된 연 멤버가 모두 CSV에 포함된다(제외 설정한 인원 외에는 필터 없음, decisions.md D-34). 비활성(`isActive=false`) 연 멤버, 활성 연 멤버, 캐주얼 예약자, 관리자 대리 등록자, 월 멤버 자동 배정 대상이 모두 포함됨을 확인.
+- [x] 비로그인 상태로 `GET /api/admin/participant-codes/export`를 직접 호출하면 401로 거부된다(관리자 미들웨어 보호 확인). `GET /api/admin/participant-codes`, `PATCH /api/admin/participant-codes/[id]`도 401. 화면(`/admin/participant-codes`)도 비로그인 시 `/admin/login`으로 리다이렉트됨을 확인.
+
+**내보내기 제외 설정 (opt-out, decisions.md D-34 개정 1)**
+- [x] 참여자 코드 목록의 각 행에서 "내보내기 제외" 토글을 켜면 즉시 저장되고(`PATCH /api/admin/participant-codes/[id]`), 화면에서 "제외됨" 상태로 표시된다. PATCH 200 + 렌더된 화면에서 해당 행이 "제외됨" 배지와 "내보내기 포함" 버튼으로 바뀌고 상단 요약이 "내보내기 대상 39건 (제외 1건)"으로 갱신됨을 확인. 잘못된 body(`{}`, 문자열, 숫자)는 400, 없는 id는 404로 거부된다.
+- [x] 제외 설정한 인원은 그 행이 화면 목록에서 사라지지 않고 계속 보인다(관리자가 다시 토글을 꺼서 포함시킬 수 있어야 함). 목록 조회는 `listParticipantCodesForAdmin`(필터 없음)이라 제외된 행도 그대로 노출됨을 확인.
+- [x] 제외 설정 직후 CSV를 다운로드하면 그 인원이 실제로 CSV에서 빠져 있다(코드/이름/전화번호 어디에도 없음을 확인). 39행 → 38행으로 줄고 해당 코드/이름이 CSV에 없음을 확인(같은 전화번호를 쓰는 다른 신원은 계속 포함됨 — 제외 단위가 신원임을 함께 확인).
+- [x] 아무 설정도 하지 않은 기본 상태에서는 전원이 CSV에 포함된다(opt-out 기본값이 "포함"인지 확인 — `excludedFromExport` 기본값 `false`). 새로 발급된 코드가 모두 `excludedFromExport=0`으로 생성됨을 확인.
+- [x] 제외 토글을 껐다가(제외) 다시 켜면(포함) 그 다음 CSV 다운로드에는 다시 포함된다(38행 → 39행으로 복귀 확인).
+- [x] 브라우저를 새로고침하거나 재로그인해도 제외 설정이 유지된다(DB에 영구 저장 확인 — 세션/클라이언트 상태가 아님). `ParticipantCode.excludedFromExport` 컬럼 값으로 확인, 화면 재요청 시에도 동일하게 렌더됨.
+- [x] 예약 신청 등으로 그 사람의 `ParticipantCode`가 재사용되어도(같은 신원으로 재예약) `excludedFromExport` 값이 그대로 유지된다. 제외 설정된 신원으로 새 예약을 넣은 뒤에도 `excludedFromExport=1`이 유지되고 같은 코드가 반환됨을 확인(`ensureParticipantCode`가 이 컬럼을 건드리지 않음).
+
+**내보내기 이력 (decisions.md D-34 개정 2)**
+- [x] CSV를 다운로드할 때마다 `ParticipantCodeExportLog`가 한 건씩 생성되고, `exportedCount`가 실제로 그 CSV에 담긴 행 수(제외 설정 반영 후)와 정확히 일치한다. 연속 다운로드 5회에서 매번 1건씩 증가하고, 제외 1명 상태의 다운로드는 `exportedCount=38`(CSV 실제 38행)로 기록됨을 확인.
+- [x] 관리자 화면(`/admin/participant-codes`)에 최근 내보내기 이력(최소 최근 1건, 예: "최근 내보내기: 2026-08-15 14:32 (312명)")이 표시되고, 다시 다운로드하면 화면을 새로고침했을 때 이력이 갱신된다. 최신 1건은 "최근 내보내기: 2026-09-03 21:09 (39명)" 형태로, 그 이전 이력은 하위 목록으로 최대 5건까지 표시됨을 확인(시각은 Pacific/Auckland 기준 — UTC 09:09 → 21:09).
+- [x] 화면 방문/목록 조회만으로는(CSV 다운로드 버튼을 누르지 않으면) 이력이 새로 기록되지 않는다. `GET /api/admin/participant-codes` 3회 + 화면 렌더 반복 후에도 로그 건수 불변 확인.
+- [x] 이력에는 "누가" 받았는지에 해당하는 정보(관리자 식별자 등)가 전혀 없다. `ParticipantCodeExportLog` 스키마가 `id/exportedAt/exportedCount` 3개 컬럼뿐임을 확인.
+
+**백필 스크립트**
+- [x] 이 기능 배포 전에 이미 존재하던 `Booking`(과거 예약)과 `AnnualMember`(과거 등록) 데이터에 대해 `scripts/backfill-participant-codes.ts`를 실행하면, 각 고유 신원(`normalizedName+phoneHash`)마다 정확히 하나의 `ParticipantCode`가 생성된다(중복 생성 없음). `npx tsx --env-file=.env scripts/backfill-participant-codes.ts`로 실행. 특정 신원의 코드 행을 지우고 재실행하면 "신규 발급: 1건"으로 그 신원만 복구되고, 복구된 행의 `phoneEncrypted`(원본 `Booking` 값 복사)가 CSV 내보내기에서 정상 복호화됨을 확인.
+- [x] 백필 스크립트를 두 번 연속 실행해도 두 번째 실행에서는 아무것도 새로 생성되지 않는다(멱등성 확인, 콘솔 요약에 "신규 0건"으로 표시). 2회 연속 실행 모두 "신규 발급: 0건" 확인.
+- [x] 백필 완료 후 CSV를 다시 내보내면, 이 기능 도입 이전부터 있던 과거 예약자/연 멤버도 목록에 포함되어 있다(비활성 연 멤버 25명이 모두 CSV에 포함됨을 확인).
+
+**QA 환경 제약(2026-09-03)**
+
+- 관리자 화면의 토글/다운로드 버튼은 브라우저에서 직접 클릭하지 않고, 화면이 실제로 호출하는 API(`PATCH /api/admin/participant-codes/[id]`, `GET .../export`)를 호출한 뒤 서버 렌더링된 `/admin/participant-codes` HTML로 결과 표시를 확인하는 방식으로 검증했다(관리자 로그인 폼에 비밀번호를 입력하지 않는 정책). 공개 화면(예약 신청 완료 / 내 예약 조회)은 브라우저에서 직접 조작해 검증했다.
+- QR 다운로드는 앵커 트리거(파일명 + PNG data URL) 및 QR 페이로드 일치까지 검증했고, 브라우저 샌드박스 특성상 OS 파일 시스템에 실제로 저장되는 단계까지는 확인하지 못했다.
+
+---
+
 ## 11. 비기능 테스트
 
 ### 동시성 테스트

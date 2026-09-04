@@ -27,6 +27,10 @@ app/
     annual-members/page.tsx
     monthly-members/page.tsx
     club-day-patterns/page.tsx        # 클럽데이 패턴 목록/등록/수정/비활성화/삭제 (신규, requirements.md 25번)
+    participant-codes/page.tsx        # 참여자 코드 목록(코드/이름/전화번호) + 내보내기 제외 토글 + 최근 내보내기
+                                       # 이력 + CSV 다운로드 버튼 (신규, requirements.md 27번, decisions.md D-34
+                                       # 개정 1·2). 등록/수정/삭제 같은 일반 CRUD는 없다(파생 데이터, YAGNI) —
+                                       # 유일한 쓰기 액션은 제외 토글뿐이라 다른 관리 화면과는 성격이 다르다
   api/
     booking-days/route.ts             # GET (공개 목록)
     booking-days/[id]/route.ts        # GET (공개 상세)
@@ -34,6 +38,8 @@ app/
     bookings/lookup/route.ts          # POST (전화번호로 조회)
     bookings/[id]/cancel/route.ts     # POST (사용자 취소)
     bookings/[id]/payment-proof/route.ts  # POST (사용자 셀프 결제증빙 업로드, 신규, requirements.md 26번)
+    # bookings/route.ts, bookings/lookup/route.ts 응답 DTO에 participantCode 필드 추가(신규 라우트 아님,
+    # 기존 응답 확장, requirements.md 27번)
     cron/club-days/route.ts           # GET (신규, Vercel Cron 전용, CRON_SECRET 헤더로 보호. /api/admin 바깥이라
                                        # 관리자 세션 미들웨어 대상이 아님 — 이 라우트 자체에서 인증 검증)
     admin/login/route.ts              # POST
@@ -54,6 +60,9 @@ app/
     admin/monthly-members/apply/route.ts # POST (연/월[/요일] 일괄 자동배정)
     admin/club-day-patterns/route.ts       # GET, POST (신규)
     admin/club-day-patterns/[id]/route.ts  # PATCH(수정/비활성화·활성화), DELETE(소프트 삭제) (신규)
+    admin/participant-codes/route.ts         # GET, 목록 + 총 건수 + 최근 내보내기 이력 (신규, requirements.md 27.5번)
+    admin/participant-codes/export/route.ts  # GET, CSV 다운로드 + 내보내기 이력 기록 (신규, requirements.md 27.5번)
+    admin/participant-codes/[id]/route.ts    # PATCH, excludedFromExport 토글 전용 (신규, requirements.md 27.5.2번)
     admin/dashboard/route.ts          # GET
   layout.tsx
   globals.css
@@ -74,11 +83,14 @@ lib/
     paymentProofService.ts       # isPaymentConfirmationRequired(단건/배치), uploadPaymentProof,
                                   # getPaymentProof, setPaymentConfirmation (신규, requirements.md 26번,
                                   # decisions.md D-31·D-32)
+    participantCodeService.ts    # ensureParticipantCode(단건)/ensureParticipantCodesBatch(배치),
+                                  # listParticipantCodesForExport (신규, requirements.md 27번, decisions.md D-33·D-34)
   validation/
     bookingSlots.ts             # assertTimeRange/validateSlots — bookingDayService.ts에서 추출해 공유
                                  # (신규, clubDayPatternService도 동일 검증 규칙을 재사용하기 위함)
   normalize.ts                # normalizeName, normalizePhone
-  timezone.ts                  # Pacific/Auckland 관련 유틸(오늘 날짜, dayOfWeek 계산)
+  timezone.ts                  # Pacific/Auckland 관련 유틸(오늘 날짜, dayOfWeek 계산,
+                                # formatDateTimeInTimeZone — 이벤트 발생 시각 "YYYY-MM-DD HH:mm" 표시용)
   imageCompression.ts          # compressImageFile — 클라이언트 전용(브라우저 Canvas/Image API),
                                 # 결제증빙 업로드 전 리사이즈/재인코딩 (신규, decisions.md D-32,
                                 # 새 npm 의존성 없음)
@@ -93,13 +105,26 @@ lib/
 components/
   ui/                          # shadcn/ui 컴포넌트 (button, input, table, dialog 등)
   admin/                       # 관리자 화면 전용 컴포넌트
+    ParticipantCodesPanel.tsx  # 참여자 코드 목록 테이블 + 행별 "내보내기 제외" 토글 + 최근 내보내기
+                                # 이력 표시 (신규, requirements.md 27.5번, decisions.md D-34 개정 1·2).
+                                # AnnualMembersPanel과 동일한 클라이언트 컴포넌트 패턴(목록은 서버
+                                # 컴포넌트가 props로 전달, 토글 액션만 fetch + router.refresh())
   public/                      # 사용자 화면 전용 컴포넌트
+    ParticipantQrButton.tsx    # "QR 저장하기" 버튼. code(string) prop을 받아 클릭 시 qrcode를
+                                # 동적 임포트해 PNG로 렌더링 후 다운로드 (신규, requirements.md 27.4번,
+                                # decisions.md D-35). BookingForm/CancelLookup 양쪽에서 재사용
 
 middleware.ts                  # /admin/*, /api/admin/* 보호 (로그인 라우트 제외)
 
 prisma/
   schema.prisma
   migrations/
+
+scripts/
+  backfill-participant-codes.ts  # 1회성 백필 스크립트 (신규, requirements.md 27.3번, decisions.md D-33).
+                                  # 기존 Booking/AnnualMember 데이터로부터 참여자 코드를 소급 발급한다.
+                                  # 앱 실행 경로가 아니므로 수동으로 1회 실행한다(아래 2장 서비스 설명,
+                                  # deployment.md 2장 참고)
 
 .env                            # ADMIN_PASSWORD, ADMIN_SESSION_SECRET,
                                  # TURSO_DATABASE_URL, TURSO_AUTH_TOKEN, PII_SECRET_KEY, CRON_SECRET
@@ -108,6 +133,8 @@ vercel.json                    # crons 설정 (신규, deployment.md 참고)
 ```
 
 배포는 Vercel(Hobby, 무료) + Turso(무료 티어)를 사용한다(확정, decisions.md D-09). Docker/자체 서버 배포는 사용하지 않으므로 `Dockerfile`/`docker-compose.yml`은 두지 않는다. 자세한 내용은 `deployment.md` 참고.
+
+`package.json`에 신규 의존성 `qrcode`(dependencies)와 `@types/qrcode`(devDependencies)를 추가한다(decisions.md D-35). 이 프로젝트에 QR 관련 패키지가 추가되는 것은 이번이 처음이다(미병합 `feature/member-check-in-out` 브랜치의 `qrcode.react`는 `main` 기준 존재하지 않음).
 
 ---
 
@@ -181,6 +208,35 @@ vercel.json                    # crons 설정 (신규, deployment.md 참고)
 - `uploadPaymentProof(bookingId, file, uploadedBy, phone?)`: `uploadedBy === "SELF"`면 `phoneHash` 검증(취소와 동일 패턴) 후 진행, `"ADMIN"`이면 생략. `CANCELLED` 예약은 거부(`ConflictError`). `isBookingDayEnded`는 검사하지 않는다(requirements.md 26.3). MIME 타입(jpeg/png/webp)과 2MB 상한을 검증(`ValidationError`). `prisma.paymentProof.upsert({ where: { bookingId }, ... })`로 기존 증빙을 교체하거나 새로 생성한다.
 - `getPaymentProof(bookingId)`: 관리자 전용 조회. `PaymentProof`가 없으면 `NotFoundError`, 있으면 `{ imageDataUrl: \`data:${mimeType};base64,${imageData}\`, uploadedBy, updatedAt }`을 반환한다. `Booking`을 조회하는 다른 함수들과 달리 이미지가 필요할 때만 명시적으로 호출된다(decisions.md D-31 — `Booking`과 분리한 이유).
 - `setPaymentConfirmation(bookingId, confirmed)`: 관리자 전용. `booking.paymentConfirmed`/`paymentConfirmedAt`을 갱신(확인 취소 시 `paymentConfirmedAt: null`). 증빙 이미지 유무를 검사하지 않는다.
+
+### ParticipantCodeService (`lib/services/participantCodeService.ts`, 신규, requirements.md 27번, decisions.md D-33·D-34)
+- `generateParticipantCode()`(모듈 내부 private 함수): `crypto.randomBytes(9).toString("base64url")`로 12자 랜덤 문자열을 만든다. 새 npm 의존성 없이 Node 내장 `crypto`만 사용(`lib/security/phoneCrypto.ts`와 같은 방식).
+- `ensureParticipantCode(name, phone, client = prisma)`:
+  1. `normalizeName`/`normalizePhone`으로 정규화 후 `hashPhone`으로 `phoneHash` 계산.
+  2. `client.participantCode.findUnique({ where: { normalizedName_phoneHash: { normalizedName, phoneHash } } })`로 기존 레코드 조회.
+  3. 있으면: 기존 행을 갱신 없이 그대로 반환(`{ code: existing.code, id: existing.id }`). `name`은 신원 키(`normalizedName`)와 항상 같은 값으로만 생성되므로 갱신할 필요 자체가 없고, `phoneEncrypted`도 재암호화하지 않는다(`phoneHash` 일치로 평문 값이 이미 동일함이 보장되므로).
+  4. 없으면: `code = generateParticipantCode()`로 `client.participantCode.create({ data: { name: normalizedName, normalizedName, phoneHash, phoneEncrypted: encryptPhone(normalizedPhone), code } })` 시도. Prisma 유니크 제약 위반 에러(`P2002`, 동시 요청으로 인한 레이스)를 잡으면 다시 2번 조회로 폴백해 기존 값을 반환하고, 그 외 에러는 그대로 던진다.
+  5. `createBooking`/`adminCreateBooking`이 예약 생성과 **같은 트랜잭션**(`tx`) 안에서 이 함수를 호출하고, 반환된 `code`를 예약 응답 DTO에 `participantCode` 필드로 병합한다. `lookupBookingsByPhone`도 각 예약의 `normalizedName`(같은 조회 내에서는 `phoneHash`가 공통이므로 이름만 다르면 됨)로 배치 조회해 `participantCode`를 함께 내려준다(N+1 회피, `batchComputePaymentConfirmationRequirements`와 동일한 패턴).
+- `ensureParticipantCodesBatch(participants: { name, phone }[], client)`: `applyMonthlyMembersToBookingDay`(월 멤버 자동 배정, 다건 처리) 전용 배치 버전.
+  1. 각 참여자의 `normalizedName`/`phoneHash`를 계산하고 동일 신원 중복을 배치 내에서 먼저 제거.
+  2. `client.participantCode.findMany({ where: { OR: pairs.map(p => ({ normalizedName: p.normalizedName, phoneHash: p.phoneHash })) } })`로 기존 등록 여부를 1회 조회.
+  3. 없는 조합만 모아 `client.participantCode.createMany({ data: [...] })`로 1회에 생성(각 행에 새 `code` 발급).
+  4. 기존 행은 단건 경로와 동일하게 갱신 없이 그대로 둔다 — `name`이 신원 키의 일부라 애초에 갱신할 대상이 없다.
+  5. 반환값은 호출자가 쓰지 않는다(코드 발급/재사용 자체가 목적). `applyMonthlyMembersToBookingDay`가 대상 월 멤버 목록을 이미 로드한 시점에 같은 트랜잭션에서 호출한다.
+- `listParticipantCodesForExport()`: `prisma.participantCode.findMany({ where: { excludedFromExport: false }, orderBy: { name: "asc" } })` 후 각 행을 `{ code, name, phone: decryptPhone(phoneEncrypted) }`로 매핑해 반환. 관리자 CSV 내보내기(`GET /api/admin/participant-codes/export`)에서만 호출한다(decisions.md D-34 개정 1 — `excludedFromExport=true`인 행만 걸러내고, 그 외 필터는 없음).
+- `listParticipantCodesForAdmin()`: `prisma.participantCode.findMany({ orderBy: { name: "asc" } })`(제외 필터 없이 전체) 후 각 행을 `{ id, code, name, phone: decryptPhone(phoneEncrypted), excludedFromExport }`로 매핑해 반환. 관리자 화면(`/admin/participant-codes`)의 목록 테이블 렌더링 전용 — `listParticipantCodesForExport`와 달리 `id`와 `excludedFromExport`를 포함해 토글 UI가 현재 상태를 표시하고 대상을 특정할 수 있게 한다.
+- `setParticipantCodeExclusion(id, excludedFromExport)`: 관리자 전용. `prisma.participantCode.update({ where: { id }, data: { excludedFromExport } })`. 대상이 없으면 `NotFoundError`. `PATCH /api/admin/participant-codes/[id]`가 호출한다(decisions.md D-34 개정 1).
+- `recordParticipantCodeExport(exportedCount)`: `prisma.participantCodeExportLog.create({ data: { exportedCount } })`(`exportedAt`은 `@default(now())`). `GET /api/admin/participant-codes/export` 핸들러가 `listParticipantCodesForExport()` 결과로 CSV 응답을 실제로 만든 직후에만 호출한다 — 화면 조회(`listParticipantCodesForAdmin`)에서는 호출하지 않는다(decisions.md D-34 개정 2).
+- `listParticipantCodeExportLogs(limit = 5)`: `prisma.participantCodeExportLog.findMany({ orderBy: { exportedAt: "desc" }, take: limit })`. 관리자 화면이 최근 내보내기 이력을 표시할 때 사용(기본 최근 5건 — 화면에는 최소 1건만 노출해도 되지만, 서비스 함수 자체는 여러 건을 받을 수 있게 해 화면 쪽에서 "더보기" 없이 최근 이력을 몇 건 더 보여주고 싶어져도 API 변경 없이 대응 가능).
+- `countParticipantCodes()`: `prisma.participantCode.count()`. 참여자 코드 총 발급 건수(제외 설정과 무관한 전체 수)를 가볍게 보여주기 위한 용도.
+
+**백필 스크립트(`scripts/backfill-participant-codes.ts`, 신규)**
+이 기능 도입 이전에 이미 쌓인 참여자(과거 `Booking`, 기존 `AnnualMember`)에게 코드를 소급 발급하는 1회성 스크립트. 앱의 런타임 경로가 아니라 배포 후 수동으로 한 번 실행한다(`npx tsx scripts/backfill-participant-codes.ts`, `PII_SECRET_KEY`/DB 연결 환경변수가 실행 환경에 설정되어 있어야 함).
+1. `prisma.booking.groupBy`류 조회 대신, `prisma.booking.findMany({ select: { normalizedName: true, phoneHash: true, phoneEncrypted: true, createdAt: true }, orderBy: { createdAt: "desc" } })`로 전체를 가져와 애플리케이션 메모리에서 `normalizedName+phoneHash` 기준으로 그룹핑하고, 각 그룹의 첫 번째(= `createdAt` 내림차순 정렬이므로 가장 최근) 행의 `phoneEncrypted`를 대표값으로 사용한다(가장 최근에 실제로 쓰인 암호문이므로 복호화 시 항상 유효).
+2. `prisma.annualMember.findMany({ select: { normalizedName: true, phoneHash: true, phoneEncrypted: true } })`(활성/비활성 모두 포함)를 추가로 조회해 1번 결과와 `normalizedName+phoneHash` 기준으로 합집합을 만든다(둘 다 없는 조합만 새로 등록).
+3. `prisma.participantCode.findMany()`로 이미 발급된 조합을 조회해 제외한다(재실행해도 안전 — 멱등성).
+4. 남은 조합마다 새 `code`를 생성해 `createMany`로 일괄 등록한다.
+5. 처리 건수(신규 생성/이미 존재/건너뜀)를 콘솔에 요약 출력한다.
 
 ---
 
@@ -355,6 +411,32 @@ model PaymentProof {
   createdAt  DateTime          @default(now())
   updatedAt  DateTime          @updatedAt // 재업로드(교체) 시 갱신
 }
+
+// 참여자 영구 식별 코드(오프라인 매칭 프로그램 연동용, decisions.md D-33, requirements.md 27번).
+// AnnualMember/Booking 어느 쪽에도 FK로 종속되지 않는다 — 의도적으로 독립 모델이다(D-33 사유 참고).
+// 신원 키(normalizedName+phoneHash)는 Booking의 중복 예약 판정(18번)과 동일한 정의를 재사용한다.
+model ParticipantCode {
+  id                 String   @id @default(cuid())
+  name               String   // 표시용, 생성 시점의 정규화된 이름으로 고정(신원 키의 일부라 이후 갱신되지 않음)
+  normalizedName     String
+  phoneHash          String   // HMAC-SHA256(normalizedPhone) — Booking/AnnualMember와 동일한 조회용 해시
+  phoneEncrypted     String   // AES-256-GCM(normalizedPhone) — CSV 내보내기(27.5번) 시에만 복호화
+  code               String   @unique // 12자 랜덤 문자열(crypto.randomBytes(9).toString("base64url")). QR에는 이 값만 인코딩
+  excludedFromExport Boolean  @default(false) // true면 CSV 내보내기에서 제외(opt-out, decisions.md D-34 개정 1).
+                                                // 관리자가 다시 false로 되돌리기 전까지 영구 유지
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([normalizedName, phoneHash])
+}
+
+// CSV 내보내기 이력(decisions.md D-34 개정 2, requirements.md 27.5.3번). "누가" 받았는지는 기록하지
+// 않는다 — 관리자가 공유 비밀번호 하나로 로그인하는 단일 계정 체제(architecture.md 5장)라 의미가 없다.
+model ParticipantCodeExportLog {
+  id            String   @id @default(cuid())
+  exportedAt    DateTime @default(now())
+  exportedCount Int      // 그 시점에 실제로 CSV에 담긴 행 수(excludedFromExport=false 필터 반영 후)
+}
 ```
 
 비고
@@ -372,8 +454,8 @@ model PaymentProof {
 |---|---|---|
 | GET | `/api/booking-days` | 공개된(`isOpen=true`) 예약일 목록 조회 |
 | GET | `/api/booking-days/[id]` | 예약일 상세 + 예약자 이름/상태 목록(전화번호 제외) |
-| POST | `/api/bookings` | 예약 신청 (name, phone, bookingDayId) → `createBooking` |
-| POST | `/api/bookings/lookup` | 전화번호로 본인 예약 목록 조회 → `lookupBookingsByPhone` |
+| POST | `/api/bookings` | 예약 신청 (name, phone, bookingDayId) → `createBooking`. 응답에 `participantCode`(신규, requirements.md 27번) 포함 |
+| POST | `/api/bookings/lookup` | 전화번호로 본인 예약 목록 조회 → `lookupBookingsByPhone`. 각 예약 항목에 `participantCode`(신규) 포함 |
 | POST | `/api/bookings/[id]/cancel` | 예약 취소 (phone) → `cancelBooking` |
 | POST | `/api/bookings/[id]/payment-proof` | 결제 증빙 셀프 업로드 (multipart/form-data: file, phone) → `uploadPaymentProof(..., "SELF", phone)` (신규, requirements.md 26.3) |
 
@@ -408,6 +490,9 @@ model PaymentProof {
 | POST | `/api/admin/club-day-patterns` | 클럽데이 패턴 등록 |
 | PATCH | `/api/admin/club-day-patterns/[id]` | 패턴 수정 및 활성/비활성 토글(`isActive`) |
 | DELETE | `/api/admin/club-day-patterns/[id]` | 패턴 소프트 삭제(`deletedAt` 기록, 물리적 삭제 아님, decisions.md D-29) |
+| GET | `/api/admin/participant-codes` | 참여자 코드 목록(제외 설정 포함 전체) + 최근 내보내기 이력 → `listParticipantCodesForAdmin`/`countParticipantCodes`/`listParticipantCodeExportLogs` (신규, requirements.md 27.5번). 관리자 화면(`/admin/participant-codes`)은 Server Component가 이 서비스 함수들을 직접 호출하며(다른 관리자 페이지와 동일 패턴, 예: `annual-members/page.tsx`), 이 라우트는 REST 표면의 일관성을 위해 함께 제공한다 |
+| PATCH | `/api/admin/participant-codes/[id]` | 내보내기 제외 토글 전용(body: `{ excludedFromExport: boolean }`) → `setParticipantCodeExclusion` (신규, requirements.md 27.5.2번, decisions.md D-34 개정 1) |
+| GET | `/api/admin/participant-codes/export` | 참여자 코드 CSV 다운로드(코드/이름/전화번호, `excludedFromExport=false`만) → `listParticipantCodesForExport` 호출 후 `recordParticipantCodeExport`로 이력 기록 (신규, requirements.md 27.5번, decisions.md D-34) |
 | GET | `/api/admin/dashboard` | 대시보드 요약 데이터 |
 
 예약자 목록/연 멤버 목록을 반환하는 GET 라우트는 DB의 `phoneEncrypted`를 서버(route handler)에서 복호화해 평문 전화번호로 응답에 담는다. 클라이언트로는 항상 복호화된 평문이 내려가며, `phoneHash`/`phoneEncrypted` 원값은 API 응답에 노출하지 않는다.
@@ -416,6 +501,13 @@ model PaymentProof {
 - `listBookingsForAdmin`(`GET /api/admin/booking-days/[id]/bookings`)과 `lookupBookingsByPhone`(`POST /api/bookings/lookup`)의 응답에는 `paymentConfirmationRequired`(계산값)·`paymentConfirmed`·`hasPaymentProof`(boolean, `PaymentProof` 존재 여부)만 포함하고, `PaymentProof.imageData`(base64 본문)는 절대 포함하지 않는다. 이미지 자체는 `GET /api/admin/bookings/[id]/payment-proof`를 관리자가 명시적으로 호출했을 때만 내려간다(decisions.md D-31, 목록 응답 비대화 방지).
 - 업로드 라우트(`POST /api/bookings/[id]/payment-proof`, `POST /api/admin/bookings/[id]/payment-proof`)는 `multipart/form-data`를 Next.js Route Handler의 내장 `Request.formData()`(Web API)로 파싱한다. 별도 파서 라이브러리(`multer`, `formidable` 등)를 추가하지 않는다(decisions.md D-32, 최소 의존성 원칙). 서버는 파일 크기 2MB 상한과 MIME 타입(jpeg/png/webp)을 검증한다.
 - 클라이언트 업로드 전 압축(`lib/imageCompression.ts`)도 브라우저 네이티브 `Image`/`HTMLCanvasElement`/`canvas.toBlob` API만 사용하며 새 npm 의존성이 없다. 즉 이번 기능은 `package.json`에 어떤 패키지도 추가하지 않는다(`@vercel/blob` 등 오브젝트 스토리지 SDK 불필요, decisions.md D-32).
+
+**참여자 코드 관련 신규 라우트 비고 (requirements.md 27번, decisions.md D-33~D-35)**
+- `GET /api/admin/participant-codes/export`는 JSON이 아니라 `Content-Type: text/csv; charset=utf-8` 응답을 직접 만든다(`withApiHandler`의 `{ data }`/`{ error }` JSON 포맷을 따르지 않는 이 프로젝트의 첫 예외 라우트 — 파일 다운로드이므로 `Content-Disposition: attachment; filename="participant-codes-{Pacific/Auckland 기준 YYYYMMDD}.csv"` 헤더를 함께 내려보낸다). 응답 본문 맨 앞에 UTF-8 BOM(`﻿`)을 붙여 한글이 포함된 CSV를 Excel에서 열었을 때 깨지지 않도록 한다.
+- CSV 값 이스케이프: 쉼표/따옴표/개행이 포함된 값은 큰따옴표로 감싸고 내부 큰따옴표는 두 번 반복해 이스케이프한다(표준 CSV 규칙). 이름/전화번호에는 실질적으로 쉼표가 들어갈 일이 거의 없지만 방어적으로 항상 이스케이프를 적용한다.
+- `POST /api/bookings`, `POST /api/bookings/lookup` 응답에 추가되는 `participantCode`는 항상 문자열이다(백필 스크립트로 기존 데이터도 전부 커버되므로 이 기능 배포 이후에는 `null`이 될 일이 없다 — 단, 배포 직후 백필 스크립트 실행 전까지의 과도기에는 과거 예약 조회 시 `participantCode`가 없을 수 있으니, 클라이언트는 방어적으로 값이 없으면 QR 버튼을 숨긴다).
+- `GET /api/admin/participant-codes/export` 핸들러는 (1) `listParticipantCodesForExport()` 호출 → (2) CSV 문자열 생성 → (3) `recordParticipantCodeExport(rows.length)` 호출(같은 요청 처리 안에서, CSV 응답을 만든 직후) → (4) CSV 응답 반환 순서로 처리한다. 이력 기록은 실제로 CSV가 생성되는 이 라우트에서만 일어나며, 화면 조회(`GET /api/admin/participant-codes`, `listParticipantCodesForAdmin`)에서는 호출하지 않는다(decisions.md D-34 개정 2 — "언제 실제로 내보냈는지"만 기록).
+- `PATCH /api/admin/participant-codes/[id]`는 이 프로젝트의 다른 PATCH 라우트(예: `PATCH /api/admin/club-day-patterns/[id]`가 `isActive` 토글을 처리하는 것)와 동일하게, 단일 필드(`excludedFromExport`)만 받아 갱신한다. 다른 필드(`code`, `name` 등)는 이 라우트로 수정할 수 없다 — `ParticipantCode`는 예약 생성 시에만 시스템이 채우는 파생 데이터이므로(decisions.md D-34) 관리자가 임의로 값을 바꿀 수 있는 일반 수정 API를 두지 않는다.
 
 ### 크론용 (`/api/admin/*` 미들웨어 보호 대상이 아님, 라우트 자체에서 `CRON_SECRET` 검증)
 
@@ -471,11 +563,11 @@ model PaymentProof {
 
 | 요구사항 20번 항목 | 담당 서비스 함수 | 트랜잭션 범위 |
 |---|---|---|
-| 예약 생성 | `BookingService.createBooking` | 기존 예약 조회(중복/재예약 판정) + memberType 판정에 필요한 연멤버 조회 + slot 카운트 조회 + insert 를 한 트랜잭션으로 묶어 동시 요청 시 슬롯 초과를 방지 |
+| 예약 생성 | `BookingService.createBooking` | 기존 예약 조회(중복/재예약 판정) + memberType 판정에 필요한 연멤버 조회 + slot 카운트 조회 + insert + `ParticipantCodeService.ensureParticipantCode` 호출까지 한 트랜잭션으로 묶어 동시 요청 시 슬롯 초과를 방지하고, 예약과 참여자 코드 발급이 분리되어 한쪽만 성공하는 상태를 막는다(requirements.md 27번, decisions.md D-33) |
 | 예약 취소 | `BookingService.cancelBooking` | 상태 조회/검증 + status 업데이트 + (CONFIRMED였다면) `promoteWaitingBookings` 호출까지 하나의 트랜잭션 |
 | 관리자 승인 | `BookingService.adminChangeBookingStatus` | 슬롯 여유 재확인 + status 업데이트 |
 | 슬롯 변경 | `BookingDayService.updateBookingDay` | BookingDay 업데이트 + (증가 시) `promoteWaitingBookings` 호출까지 하나의 트랜잭션. 감소 시에는 업데이트만 수행(강제 하향 없음) |
-| 월 멤버 자동 배정 | `MonthlyMemberService.applyMonthlyMembersToBookingDay` | 대상 월 멤버 조회 + 중복 예약 확인 + 예약 insert(들)를 BookingDay 단위로 하나의 트랜잭션 |
+| 월 멤버 자동 배정 | `MonthlyMemberService.applyMonthlyMembersToBookingDay` | 대상 월 멤버 조회 + 중복 예약 확인 + 예약 insert(들) + `ParticipantCodeService.ensureParticipantCodesBatch` 호출까지 BookingDay 단위로 하나의 트랜잭션 |
 | 대기자 자동 승격 | `BookingService.promoteWaitingBookings` | 남은 슬롯 계산 + 대상 대기자 목록(FIFO 정렬) 조회 + 순차 status 업데이트. 단독 호출 시에도 자체 트랜잭션으로 감싸고, 위 취소/슬롯변경 흐름에서 호출될 때는 상위 트랜잭션에 참여(같은 `tx` 인스턴스 전달) |
 | 클럽데이 생성(신규) | `ClubDayGenerationService.generateUpcomingClubDays` | 패턴별로 개별 트랜잭션 — 중복 생성 확인(`clubDayPatternId`+`date`) + `BookingDay` insert + (조건부) `applyMonthlyMembersToBookingDay`까지 패턴 단위로 하나의 트랜잭션. 한 패턴의 실패가 다른 패턴 처리에 영향을 주지 않는다 |
 
