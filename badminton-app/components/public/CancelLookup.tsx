@@ -178,6 +178,8 @@ export function CancelLookup() {
                 type="tel"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
+                placeholder={t.phonePlaceholder}
+                autoComplete="tel"
                 required
               />
             </div>
