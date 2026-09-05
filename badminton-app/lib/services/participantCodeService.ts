@@ -229,6 +229,20 @@ export async function setParticipantCodeExclusion(id: string, excludedFromExport
 }
 
 /**
+ * 참여자 코드 삭제(관리자 전용, requirements.md 27.5.4번). 제외 토글과 달리 행 자체를 완전히
+ * 없앤다 — 잘못 등록되어 다시 쓰일 일이 없는 신원을 정리하는 용도다. 삭제 후 같은
+ * normalizedName+phoneHash 조합으로 다시 예약이 들어오면 새 코드가 자동 발급된다(D-33의 발급
+ * 규칙이 그대로 적용되며, 이 삭제 자체는 별도 처리를 요구하지 않는다).
+ */
+export async function deleteParticipantCode(id: string): Promise<void> {
+  const existing = await prisma.participantCode.findUnique({ where: { id } });
+  if (!existing) {
+    throw new NotFoundError("참여자 코드를 찾을 수 없습니다.");
+  }
+  await prisma.participantCode.delete({ where: { id } });
+}
+
+/**
  * CSV 내보내기 이력 기록(requirements.md 27.5.3번). GET /api/admin/participant-codes/export가
  * 실제로 CSV를 생성해 응답하는 시점에만 호출한다 — 화면 조회에서는 호출하지 않는다.
  * "누가" 받았는지는 기록하지 않는다(관리자 단일 계정 체제, decisions.md D-34 개정 2).

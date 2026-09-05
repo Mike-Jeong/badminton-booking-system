@@ -559,6 +559,13 @@ setParticipantCodeExclusion(id: string, excludedFromExport: boolean)
 - 이 설정은 명시적으로 다시 켜기 전까지 영구적으로 유지되며, CSV를 내려받을 때마다 매번 다시 선택하는 것이 아니다
 - `code`/`normalizedName`/`phoneHash` 등 다른 필드는 변경하지 않는다(제외 여부만 다루는 단일 목적 함수)
 
+### deleteParticipantCode (신규, 27.5.4번)
+```ts
+deleteParticipantCode(id: string)
+```
+- 관리자 전용. 대상 `ParticipantCode` 행을 완전히 삭제한다(존재하지 않으면 `NotFoundError`)
+- 되돌릴 수 없다 — 같은 신원이 나중에 다시 예약하면 `ensureParticipantCode`가 새 코드를 발급할 뿐, 삭제 전 코드가 복구되지는 않는다
+
 ### recordParticipantCodeExport (신규, 27.5.3번, decisions.md D-34)
 ```ts
 recordParticipantCodeExport(exportedCount: number)
@@ -797,7 +804,7 @@ listParticipantCodeExportLogs(limit?: number)
 
 ### 27.5 CSV 내보내기 (관리자 전용, decisions.md D-34)
 
-관리자 화면(`/admin/participant-codes`, 신규)은 발급된 참여자 코드 목록(코드/이름/전화번호)을 표로 보여주고, 각 행에 "내보내기 제외" 토글, 화면 상단에 최근 내보내기 이력, "CSV 다운로드" 버튼을 제공한다. 27.5.2(제외 설정) 하나 때문에 이 화면은 순수 조회 전용이 아니게 됐지만, 그 외의 등록/수정/삭제 같은 일반적인 CRUD는 여전히 두지 않는다(YAGNI) — `ParticipantCode`는 예약 생성 시 시스템이 자동으로만 채우는 파생 데이터이기 때문이다.
+관리자 화면(`/admin/participant-codes`, 신규)은 발급된 참여자 코드 목록(코드/이름/전화번호)을 표로 보여주고, 각 행에 "내보내기 제외" 토글과 "삭제" 버튼, 화면 상단에 최근 내보내기 이력, "CSV 다운로드" 버튼을 제공한다. 27.5.2(제외 설정)·27.5.4(삭제) 때문에 이 화면은 순수 조회 전용이 아니지만, 그 외의 등록/수정 같은 일반적인 CRUD는 여전히 두지 않는다(YAGNI) — `ParticipantCode`는 예약 생성 시 시스템이 자동으로만 채우는 파생 데이터이고, 관리자가 직접 손댈 수 있는 건 "내보내기에서 뺄지"와 "아예 없앨지" 두 가지뿐이다.
 
 **27.5.1 CSV 생성 규칙**
 - "CSV 다운로드" 버튼(`GET /api/admin/participant-codes/export`)을 누르면 그 시점 기준으로 CSV를 생성해 내려준다.
@@ -816,6 +823,11 @@ listParticipantCodeExportLogs(limit?: number)
 - 기록 항목: 내보낸 시각(Pacific/Auckland 기준 표시), 그 시점에 내보낸 인원 수(제외 설정 반영 후 실제 CSV에 담긴 행 수). "누가" 내려받았는지는 기록하지 않는다 — 관리자는 공유 비밀번호를 쓰는 단일 계정 체제라 개인 식별이 의미가 없다(2번 "관리자" 정의 참고).
 - 관리자 화면(`/admin/participant-codes`)에 최근 내보내기 이력을 보여준다(예: "최근 내보내기: 2026-08-15 14:32 (312명)"). 여러 건을 목록으로 보여줄지 최신 1건만 보여줄지는 화면 레이아웃에 맞게 구현하되, 최소한 "가장 최근 1건"은 항상 확인할 수 있어야 한다.
 - 이력은 삭제/정리 기능 없이 계속 누적한다(YAGNI — 발생 빈도가 낮아 저장량 문제가 되지 않음, D-32의 결제 증빙 이미지처럼 용량이 큰 데이터가 아니다).
+
+**27.5.4 삭제 (신규)**
+- 예약 폼이 지인 대리 예약(본인 번호로 지인 이름을 등록)을 허용하는 구조라, 잘못 등록되었거나 다시 쓰이지 않을 신원이 코드를 하나 차지하고 있을 수 있다. "제외" 토글은 CSV에서만 빼줄 뿐 행 자체는 남기 때문에, 이런 경우를 위해 행을 완전히 없애는 삭제 기능을 별도로 둔다.
+- `DELETE /api/admin/participant-codes/[id]`로 즉시 삭제되며 되돌릴 수 없다(확인 다이얼로그로 실수 방지). 삭제 후 같은 `normalizedName+phoneHash` 조합으로 다시 예약이 들어오면 새 코드가 자동 발급된다 — 27.3번의 발급 규칙이 그대로 적용될 뿐, 삭제 자체가 별도 상태를 남기지 않는다.
+- 같은 사람이 매번 다른 대리인 번호로 등록되어 코드가 여러 개로 쪼개지는 문제(신원 병합)는 이 기능의 범위 밖이다 — 삭제는 "이 행을 없앤다"이지 "여러 행을 하나로 합친다"가 아니다. 실제로 자주 발생하면 별도 기능으로 다시 검토한다(YAGNI).
 
 ### 27.6 예약 신청 폼 입력 UX 개선
 
