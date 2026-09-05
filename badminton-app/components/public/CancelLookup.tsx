@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -19,6 +19,7 @@ import { useLocale } from "@/lib/i18n/LanguageContext";
 import { dictionary, translateApiErrorMessage } from "@/lib/i18n/dictionary";
 import { compressImageFile } from "@/lib/imageCompression";
 import { ParticipantQrButton } from "@/components/public/ParticipantQrButton";
+import { loadSavedIdentity, saveIdentity } from "@/lib/localBookingIdentity";
 
 interface LookupBooking {
   id: string;
@@ -60,6 +61,13 @@ export function CancelLookup() {
   const [paymentMessage, setPaymentMessage] = useState<Record<string, { text: string; isError: boolean }>>({});
   const fileInputRefs = useRef<Map<string, HTMLInputElement>>(new Map());
 
+  // 마지막으로 조회/예약했던 전화번호 자동 채우기(BookingForm과 공유, lib/localBookingIdentity.ts).
+  // 하이드레이션 불일치를 피하려고 마운트 후에만 채운다.
+  useEffect(() => {
+    const saved = loadSavedIdentity();
+    if (saved.phone) setPhone(saved.phone);
+  }, []);
+
   const filteredBookings =
     bookings?.filter((b) => {
       const dateOnly = formatDateOnlyInTimeZone(new Date(b.bookingDay.date));
@@ -85,6 +93,7 @@ export function CancelLookup() {
         return;
       }
       setBookings(json.data);
+      saveIdentity({ phone });
     } catch {
       setLookupError(t.networkError);
     } finally {

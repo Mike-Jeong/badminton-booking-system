@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useLocale } from "@/lib/i18n/LanguageContext";
 import { dictionary, translateApiErrorMessage } from "@/lib/i18n/dictionary";
 import { ParticipantQrButton } from "@/components/public/ParticipantQrButton";
+import { loadSavedIdentity, saveIdentity } from "@/lib/localBookingIdentity";
 
 export function BookingForm({ bookingDayId, ended = false }: { bookingDayId: string; ended?: boolean }) {
   const router = useRouter();
@@ -22,6 +23,14 @@ export function BookingForm({ bookingDayId, ended = false }: { bookingDayId: str
   // 값이 없으면 QR 버튼을 노출하지 않는다(architecture.md 4장 방어적 처리).
   const [participantCode, setParticipantCode] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // 마지막으로 입력했던 이름/전화번호 자동 채우기(브라우저 저장, lib/localBookingIdentity.ts).
+  // SSR과의 하이드레이션 불일치를 피하려고 초기 렌더는 빈 값으로 두고 마운트 후에만 채운다.
+  useEffect(() => {
+    const saved = loadSavedIdentity();
+    if (saved.name) setName(saved.name);
+    if (saved.phone) setPhone(saved.phone);
+  }, []);
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -42,6 +51,7 @@ export function BookingForm({ bookingDayId, ended = false }: { bookingDayId: str
       }
       setResult(json.data.status);
       setParticipantCode(typeof json.data.participantCode === "string" ? json.data.participantCode : null);
+      saveIdentity({ name, phone });
       setName("");
       setPhone("");
       router.refresh();

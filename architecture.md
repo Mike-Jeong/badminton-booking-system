@@ -94,6 +94,8 @@ lib/
   imageCompression.ts          # compressImageFile — 클라이언트 전용(브라우저 Canvas/Image API),
                                 # 결제증빙 업로드 전 리사이즈/재인코딩 (신규, decisions.md D-32,
                                 # 새 npm 의존성 없음)
+  localBookingIdentity.ts      # loadSavedIdentity/saveIdentity — 예약 폼 마지막 입력값(이름/전화번호)
+                                # localStorage 캐싱, BookingForm·CancelLookup 공유 (신규, requirements.md 27.6번)
   security/
     phoneCrypto.ts             # hashPhone(HMAC-SHA256), encryptPhone/decryptPhone(AES-256-GCM), PII_SECRET_KEY 기반
   auth/
