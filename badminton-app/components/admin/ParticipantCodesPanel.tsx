@@ -31,8 +31,8 @@ export interface ParticipantCodeExportLogItem {
 
 /**
  * 참여자 코드 관리 화면(requirements.md 27.5번, decisions.md D-34).
- * 등록/수정/삭제 같은 일반 CRUD는 없다 — ParticipantCode는 예약 생성 시 시스템이 자동으로만
- * 채우는 파생 데이터이고, 유일한 쓰기 액션은 "내보내기 제외" 토글(opt-out)뿐이다.
+ * 일반 수정(이름/전화번호 변경)은 없다 — ParticipantCode는 예약 생성 시 시스템이 자동으로만
+ * 채우는 파생 데이터다. 쓰기 액션은 "내보내기 제외" 토글(opt-out)과 "삭제"(27.5.4번) 두 가지뿐.
  * 제외된 행도 목록에서 계속 보여줘야 관리자가 다시 포함시킬 수 있다(27.5.2번).
  */
 export function ParticipantCodesPanel({
@@ -63,6 +63,25 @@ export function ParticipantCodesPanel({
       const json = await res.json();
       if (!res.ok) {
         setRowError((prev) => ({ ...prev, [row.id]: json?.error?.message ?? "처리에 실패했습니다." }));
+        return;
+      }
+      router.refresh();
+    } catch {
+      setRowError((prev) => ({ ...prev, [row.id]: "네트워크 오류가 발생했습니다." }));
+    } finally {
+      setRowLoadingId(null);
+    }
+  }
+
+  async function handleDelete(row: ParticipantCodeRow) {
+    if (!window.confirm(`"${row.name}" 코드를 완전히 삭제하시겠습니까? 되돌릴 수 없습니다.`)) return;
+    setRowLoadingId(row.id);
+    setRowError((prev) => ({ ...prev, [row.id]: "" }));
+    try {
+      const res = await fetch(`/api/admin/participant-codes/${row.id}`, { method: "DELETE" });
+      const json = await res.json();
+      if (!res.ok) {
+        setRowError((prev) => ({ ...prev, [row.id]: json?.error?.message ?? "삭제에 실패했습니다." }));
         return;
       }
       router.refresh();
@@ -152,6 +171,14 @@ export function ParticipantCodesPanel({
                         onClick={() => handleToggleExclusion(row)}
                       >
                         {row.excludedFromExport ? "내보내기 포함" : "내보내기 제외"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        disabled={rowLoadingId === row.id}
+                        onClick={() => handleDelete(row)}
+                      >
+                        삭제
                       </Button>
                       {rowError[row.id] && (
                         <p role="alert" aria-live="assertive" className="text-xs text-destructive">

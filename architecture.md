@@ -62,7 +62,7 @@ app/
     admin/club-day-patterns/[id]/route.ts  # PATCH(수정/비활성화·활성화), DELETE(소프트 삭제) (신규)
     admin/participant-codes/route.ts         # GET, 목록 + 총 건수 + 최근 내보내기 이력 (신규, requirements.md 27.5번)
     admin/participant-codes/export/route.ts  # GET, CSV 다운로드 + 내보내기 이력 기록 (신규, requirements.md 27.5번)
-    admin/participant-codes/[id]/route.ts    # PATCH, excludedFromExport 토글 전용 (신규, requirements.md 27.5.2번)
+    admin/participant-codes/[id]/route.ts    # PATCH(excludedFromExport 토글)/DELETE(완전 삭제) (신규, requirements.md 27.5.2·27.5.4번)
     admin/dashboard/route.ts          # GET
   layout.tsx
   globals.css
@@ -105,7 +105,7 @@ lib/
 components/
   ui/                          # shadcn/ui 컴포넌트 (button, input, table, dialog 등)
   admin/                       # 관리자 화면 전용 컴포넌트
-    ParticipantCodesPanel.tsx  # 참여자 코드 목록 테이블 + 행별 "내보내기 제외" 토글 + 최근 내보내기
+    ParticipantCodesPanel.tsx  # 참여자 코드 목록 테이블 + 행별 "내보내기 제외" 토글 + "삭제" + 최근 내보내기
                                 # 이력 표시 (신규, requirements.md 27.5번, decisions.md D-34 개정 1·2).
                                 # AnnualMembersPanel과 동일한 클라이언트 컴포넌트 패턴(목록은 서버
                                 # 컴포넌트가 props로 전달, 토글 액션만 fetch + router.refresh())
@@ -226,6 +226,7 @@ vercel.json                    # crons 설정 (신규, deployment.md 참고)
 - `listParticipantCodesForExport()`: `prisma.participantCode.findMany({ where: { excludedFromExport: false }, orderBy: { name: "asc" } })` 후 각 행을 `{ code, name, phone: decryptPhone(phoneEncrypted) }`로 매핑해 반환. 관리자 CSV 내보내기(`GET /api/admin/participant-codes/export`)에서만 호출한다(decisions.md D-34 개정 1 — `excludedFromExport=true`인 행만 걸러내고, 그 외 필터는 없음).
 - `listParticipantCodesForAdmin()`: `prisma.participantCode.findMany({ orderBy: { name: "asc" } })`(제외 필터 없이 전체) 후 각 행을 `{ id, code, name, phone: decryptPhone(phoneEncrypted), excludedFromExport }`로 매핑해 반환. 관리자 화면(`/admin/participant-codes`)의 목록 테이블 렌더링 전용 — `listParticipantCodesForExport`와 달리 `id`와 `excludedFromExport`를 포함해 토글 UI가 현재 상태를 표시하고 대상을 특정할 수 있게 한다.
 - `setParticipantCodeExclusion(id, excludedFromExport)`: 관리자 전용. `prisma.participantCode.update({ where: { id }, data: { excludedFromExport } })`. 대상이 없으면 `NotFoundError`. `PATCH /api/admin/participant-codes/[id]`가 호출한다(decisions.md D-34 개정 1).
+- `deleteParticipantCode(id)`: 관리자 전용. 대상 존재 확인(`NotFoundError`) 후 `prisma.participantCode.delete({ where: { id } })`로 하드 삭제. `DELETE /api/admin/participant-codes/[id]`가 호출한다(requirements.md 27.5.4번).
 - `recordParticipantCodeExport(exportedCount)`: `prisma.participantCodeExportLog.create({ data: { exportedCount } })`(`exportedAt`은 `@default(now())`). `GET /api/admin/participant-codes/export` 핸들러가 `listParticipantCodesForExport()` 결과로 CSV 응답을 실제로 만든 직후에만 호출한다 — 화면 조회(`listParticipantCodesForAdmin`)에서는 호출하지 않는다(decisions.md D-34 개정 2).
 - `listParticipantCodeExportLogs(limit = 5)`: `prisma.participantCodeExportLog.findMany({ orderBy: { exportedAt: "desc" }, take: limit })`. 관리자 화면이 최근 내보내기 이력을 표시할 때 사용(기본 최근 5건 — 화면에는 최소 1건만 노출해도 되지만, 서비스 함수 자체는 여러 건을 받을 수 있게 해 화면 쪽에서 "더보기" 없이 최근 이력을 몇 건 더 보여주고 싶어져도 API 변경 없이 대응 가능).
 - `countParticipantCodes()`: `prisma.participantCode.count()`. 참여자 코드 총 발급 건수(제외 설정과 무관한 전체 수)를 가볍게 보여주기 위한 용도.
@@ -492,6 +493,7 @@ model ParticipantCodeExportLog {
 | DELETE | `/api/admin/club-day-patterns/[id]` | 패턴 소프트 삭제(`deletedAt` 기록, 물리적 삭제 아님, decisions.md D-29) |
 | GET | `/api/admin/participant-codes` | 참여자 코드 목록(제외 설정 포함 전체) + 최근 내보내기 이력 → `listParticipantCodesForAdmin`/`countParticipantCodes`/`listParticipantCodeExportLogs` (신규, requirements.md 27.5번). 관리자 화면(`/admin/participant-codes`)은 Server Component가 이 서비스 함수들을 직접 호출하며(다른 관리자 페이지와 동일 패턴, 예: `annual-members/page.tsx`), 이 라우트는 REST 표면의 일관성을 위해 함께 제공한다 |
 | PATCH | `/api/admin/participant-codes/[id]` | 내보내기 제외 토글 전용(body: `{ excludedFromExport: boolean }`) → `setParticipantCodeExclusion` (신규, requirements.md 27.5.2번, decisions.md D-34 개정 1) |
+| DELETE | `/api/admin/participant-codes/[id]` | 참여자 코드 완전 삭제(하드 삭제, 되돌릴 수 없음) → `deleteParticipantCode` (신규, requirements.md 27.5.4번) |
 | GET | `/api/admin/participant-codes/export` | 참여자 코드 CSV 다운로드(코드/이름/전화번호, `excludedFromExport=false`만) → `listParticipantCodesForExport` 호출 후 `recordParticipantCodeExport`로 이력 기록 (신규, requirements.md 27.5번, decisions.md D-34) |
 | GET | `/api/admin/dashboard` | 대시보드 요약 데이터 |
 
@@ -508,6 +510,7 @@ model ParticipantCodeExportLog {
 - `POST /api/bookings`, `POST /api/bookings/lookup` 응답에 추가되는 `participantCode`는 항상 문자열이다(백필 스크립트로 기존 데이터도 전부 커버되므로 이 기능 배포 이후에는 `null`이 될 일이 없다 — 단, 배포 직후 백필 스크립트 실행 전까지의 과도기에는 과거 예약 조회 시 `participantCode`가 없을 수 있으니, 클라이언트는 방어적으로 값이 없으면 QR 버튼을 숨긴다).
 - `GET /api/admin/participant-codes/export` 핸들러는 (1) `listParticipantCodesForExport()` 호출 → (2) CSV 문자열 생성 → (3) `recordParticipantCodeExport(rows.length)` 호출(같은 요청 처리 안에서, CSV 응답을 만든 직후) → (4) CSV 응답 반환 순서로 처리한다. 이력 기록은 실제로 CSV가 생성되는 이 라우트에서만 일어나며, 화면 조회(`GET /api/admin/participant-codes`, `listParticipantCodesForAdmin`)에서는 호출하지 않는다(decisions.md D-34 개정 2 — "언제 실제로 내보냈는지"만 기록).
 - `PATCH /api/admin/participant-codes/[id]`는 이 프로젝트의 다른 PATCH 라우트(예: `PATCH /api/admin/club-day-patterns/[id]`가 `isActive` 토글을 처리하는 것)와 동일하게, 단일 필드(`excludedFromExport`)만 받아 갱신한다. 다른 필드(`code`, `name` 등)는 이 라우트로 수정할 수 없다 — `ParticipantCode`는 예약 생성 시에만 시스템이 채우는 파생 데이터이므로(decisions.md D-34) 관리자가 임의로 값을 바꿀 수 있는 일반 수정 API를 두지 않는다.
+- `DELETE /api/admin/participant-codes/[id]`(신규, requirements.md 27.5.4번)는 같은 `[id]` 라우트 파일에 `PATCH`와 함께 정의된다(같은 리소스에 대한 두 메서드). `deleteParticipantCode`가 대상이 없으면 `NotFoundError`를 던지고, 있으면 즉시 하드 삭제한다 — 소프트 삭제(`deletedAt`)가 아니다. 지인 대리 예약(본인 번호로 지인 이름 등록)으로 잘못 만들어진 신원을 정리하는 용도이며, 삭제된 신원이 다시 예약하면 `ensureParticipantCode`가 새 코드를 발급할 뿐 이전 코드는 복구되지 않는다. 여러 행을 하나로 합치는 "병합"은 다루지 않는다(YAGNI, requirements.md 27.5.4번).
 
 ### 크론용 (`/api/admin/*` 미들웨어 보호 대상이 아님, 라우트 자체에서 `CRON_SECRET` 검증)
 
