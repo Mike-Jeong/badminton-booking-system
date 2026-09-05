@@ -533,7 +533,7 @@ ensureParticipantCode(name: string, phone: string)
 ensureParticipantCodesBatch(participants: { name: string; phone: string }[])
 ```
 - `applyMonthlyMembersToBookingDay`(월 멤버 자동 배정)처럼 여러 명을 한 번에 처리하는 경로에서 N+1 쿼리를 피하기 위한 배치 버전(`batchComputePaymentConfirmationRequirements`와 동일한 이유, 19번 참고)
-- 대상 전체의 `normalizedName + phoneHash` 조합을 한 번의 조회로 기존 등록 여부를 확인하고, 없는 조합만 모아 한 번의 `createMany`로 코드를 발급한다
+- 대상 전체의 `normalizedName + phoneHash` 조합을 한 번의 조회로 기존 등록 여부를 확인하고, 없는 조합만 모아 한 번의 `createMany`로 코드를 발급한다(신원 개수만큼 조건을 쌓지 않고 테이블 전체를 조회해 메모리에서 대조 — 대량 배치에서 SQLite 표현식 트리 깊이 제한에 걸리는 것을 피하기 위함, architecture.md 참고)
 - 단건 경로(`ensureParticipantCode`)와 동일하게 기존 행은 갱신 없이 그대로 재사용한다
 - 반환값은 호출자가 사용하지 않는다(코드 발급/재사용 자체가 목적)
 
