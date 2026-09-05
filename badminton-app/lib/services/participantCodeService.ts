@@ -115,6 +115,13 @@ export interface ParticipantForCode {
  *
  * 기존 행은 갱신 없이 그대로 둔다(ensureParticipantCode와 동일 — name은 신원 키의 일부라
  * 애초에 달라질 수 없다).
+ *
+ * 기존 등록 여부 확인은 `participants` 개수만큼 OR 조건을 쌓는 대신 `ParticipantCode` 전체의
+ * 신원 키만 한 번에 조회해 메모리에서 대조한다. 신원 개수만큼 OR 절을 쌓으면 SQLite/libSQL의
+ * 표현식 트리 깊이 제한(약 100)에 걸려 대량 배치(예: 프로덕션 백필, 전체 예약 828건에서 나온
+ * 고유 신원)에서 `SQLITE_UNKNOWN: Expression tree is too large` 에러로 실패한 전례가 있다.
+ * `ParticipantCode`는 실제 참여 인원 수에 비례해 천천히 느는 작은 테이블이라(예약 건수가 아니라
+ * 사람 수만큼만 존재) 전체 조회 비용이 문제되지 않는다.
  */
 export async function ensureParticipantCodesBatch(
   participants: ParticipantForCode[],
@@ -132,9 +139,6 @@ export async function ensureParticipantCodesBatch(
   if (pairs.length === 0) return;
 
   const existing = await client.participantCode.findMany({
-    where: {
-      OR: pairs.map((p) => ({ normalizedName: p.normalizedName, phoneHash: p.phoneHash })),
-    },
     select: { normalizedName: true, phoneHash: true },
   });
   const existingKeys = new Set(existing.map((e) => `${e.normalizedName} ${e.phoneHash}`));

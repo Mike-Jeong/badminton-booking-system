@@ -219,7 +219,7 @@ vercel.json                    # crons 설정 (신규, deployment.md 참고)
   5. `createBooking`/`adminCreateBooking`이 예약 생성과 **같은 트랜잭션**(`tx`) 안에서 이 함수를 호출하고, 반환된 `code`를 예약 응답 DTO에 `participantCode` 필드로 병합한다. `lookupBookingsByPhone`도 각 예약의 `normalizedName`(같은 조회 내에서는 `phoneHash`가 공통이므로 이름만 다르면 됨)로 배치 조회해 `participantCode`를 함께 내려준다(N+1 회피, `batchComputePaymentConfirmationRequirements`와 동일한 패턴).
 - `ensureParticipantCodesBatch(participants: { name, phone }[], client)`: `applyMonthlyMembersToBookingDay`(월 멤버 자동 배정, 다건 처리) 전용 배치 버전.
   1. 각 참여자의 `normalizedName`/`phoneHash`를 계산하고 동일 신원 중복을 배치 내에서 먼저 제거.
-  2. `client.participantCode.findMany({ where: { OR: pairs.map(p => ({ normalizedName: p.normalizedName, phoneHash: p.phoneHash })) } })`로 기존 등록 여부를 1회 조회.
+  2. `client.participantCode.findMany({ select: { normalizedName: true, phoneHash: true } })`로 테이블 전체의 신원 키만 1회 조회해 메모리에서 대조한다. 참여자 수만큼 `OR` 조건을 쌓는 방식은 SQLite/libSQL의 표현식 트리 깊이 제한(약 100)에 걸려 대량 배치(프로덕션 백필 등, 신원 100개 이상)에서 `SQLITE_UNKNOWN: Expression tree is too large` 에러로 실패한 적이 있어(2026-09-06) 이 방식으로 교체했다. `ParticipantCode`는 예약 건수가 아니라 실제 참여 인원 수만큼만 존재하는 작은 테이블이라 전체 조회가 안전하다.
   3. 없는 조합만 모아 `client.participantCode.createMany({ data: [...] })`로 1회에 생성(각 행에 새 `code` 발급).
   4. 기존 행은 단건 경로와 동일하게 갱신 없이 그대로 둔다 — `name`이 신원 키의 일부라 애초에 갱신할 대상이 없다.
   5. 반환값은 호출자가 쓰지 않는다(코드 발급/재사용 자체가 목적). `applyMonthlyMembersToBookingDay`가 대상 월 멤버 목록을 이미 로드한 시점에 같은 트랜잭션에서 호출한다.
