@@ -134,7 +134,7 @@ lib/
     session.ts                # 쿠키 서명(sign)/검증(verify), payload 정의
     dutySession.ts             # 듀티 세션 쿠키 서명(sign)/검증(verify) — session.ts와 동일하게 Web Crypto
                                 # (crypto.subtle)만 사용해 Edge Runtime(middleware.ts)과 Node 런타임 양쪽에서
-                                # 동작. payload: { role: "duty", dutyPersonId, iat, exp } (신규,
+                                # 동작. payload: { role: "duty", dutyPersonId, sessionVersion, iat, exp } (신규,
                                 # requirements.md 28.4번, decisions.md D-38)
     cronAuth.ts                # assertCronSecret(req) — CRON_SECRET Authorization 헤더 검증 (신규)
   errors.ts                    # AppError 및 하위 에러 클래스, 응답 포맷터
@@ -160,6 +160,8 @@ components/
                                 # 재사용 권장(decisions.md D-24)
     DutyBookingDayDetailView.tsx # 상세. 기본 정보 카드 + 참여자 명단 테이블(이름/상태만, 취소는 취소선).
                                 # 액션 버튼 없음(순수 읽기 전용)
+    DutyLogoutButton.tsx        # duty_session 쿠키만 무효화(관리자 세션에는 영향 없음).
+                                # components/admin/LogoutButton.tsx와 같은 패턴
 
 middleware.ts                  # /admin/*, /api/admin/*, /duty/*, /api/duty/* 보호 (각 로그인 라우트 제외).
                                 # /duty/*, /api/duty/*는 관리자 세션과는 별개로 듀티 세션 쿠키의 서명/만료만
@@ -291,14 +293,15 @@ vercel.json                    # crons 설정 (신규, deployment.md 참고)
 
 ### DutyPersonService (`lib/services/dutyPersonService.ts`, 신규, requirements.md 28.2번, decisions.md D-36·D-37)
 - `createDutyPerson(input: { name, password })`: `name`이 이미 존재하면(활성/비활성 무관, `@@unique([name])`) `ConflictError`. `hashDutyPassword(password)`(`lib/security/dutyPasswordCrypto.ts`)로 해시해 저장. `isActive` 기본값 `true`.
-- `updateDutyPerson(id, input: { name?, password?, isActive? })`: 전달된 필드만 갱신하는 부분 업데이트(`updateClubDayPattern`/`updateMonthlyMember`와 동일 패턴). `password`가 전달되면 다시 해시해 `passwordHash`를 교체하고, 전달되지 않으면 기존 해시를 그대로 둔다. `isActive` 토글도 이 함수 하나로 처리한다(별도 activate/deactivate 함수 없음).
+- `updateDutyPerson(id, input: { name?, password?, isActive? })`: 전달된 필드만 갱신하는 부분 업데이트(`updateClubDayPattern`/`updateMonthlyMember`와 동일 패턴). `password`가 전달되면 다시 해시해 `passwordHash`를 교체하고, 전달되지 않으면 기존 해시를 그대로 둔다. 비밀번호를 교체할 때는 같은 update 호출에서 `sessionVersion: { increment: 1 }`을 함께 적용해 그 계정으로 이미 발급된 세션을 전부 무효화한다(decisions.md D-38 개정 2026-09-10 — 이름 변경이나 `isActive` 토글만으로는 세션 버전이 오르지 않는다). `isActive` 토글도 이 함수 하나로 처리한다(별도 activate/deactivate 함수 없음).
 - `listDutyPersons(filter?: { activeOnly?: boolean })`: 관리자 화면(`/admin/duty-persons`)은 필터 없이 전체(활성+비활성)를 반환해 배지로 구분 표시한다. `CreateBookingDayForm`/`EditBookingDayForm`/`ClubDayPatternsPanel`의 드롭다운은 `activeOnly: true`로 호출해 활성 계정만 선택지로 보여준다. 단, 수정 폼에서는 현재 선택된 `dutyPersonId`가 비활성 계정을 가리키는 경우 그 계정도 결과에 포함시켜(현재 값이 드롭다운에서 사라지지 않도록) 이 함수가 아니라 호출부(폼 컴포넌트/라우트)에서 활성 목록 + 현재 선택값 계정을 합쳐 내려준다.
+- `getAssignableDutyPerson(id)`: 예약일/패턴에 배정할 계정을 조회해 `{ id, name, isActive }`를 반환한다(없으면 `ValidationError` — 잘못된 FK로 Prisma P2003 500이 나가지 않도록 서비스에서 먼저 차단). `BookingDayService`/`ClubDayPatternService`가 저장 직전에 호출해 `dutyPerson` 텍스트를 계정 `name`으로 동기화하는 데 사용한다(D-36 — 클라이언트가 보낸 텍스트를 그대로 믿지 않는다). 비활성 계정도 조회 가능하다(수정 폼에서 이미 배정된 비활성 계정을 그대로 재저장할 수 있어야 하므로).
 - 하드 삭제 함수는 두지 않는다(decisions.md D-37).
 
 ### DutyAuthService (`lib/services/dutyAuthService.ts`, 신규, requirements.md 28.4번, decisions.md D-38)
-- `login(name, password)`: `name`으로 `DutyPerson`을 조회해 없거나 `isActive=false`면 `DutyAuthError`. 있으면 `verifyDutyPassword(password, record.passwordHash)`로 검증(불일치 시 `DutyAuthError`). 성공하면 `createDutySessionCookieValue({ dutyPersonId: record.id })`(`lib/auth/dutySession.ts`)를 호출해 세션 쿠키 값을 반환한다.
-- `verifyDutySessionFromRequest(req)`: 요청의 듀티 세션 쿠키를 서명/만료만 검증해 `{ dutyPersonId }`를 반환한다(DB 조회 없음, `middleware.ts`처럼 빠른 1차 검증이 필요한 지점에서 사용).
-- `requireActiveDutyPerson(req)`: 이 서비스의 핵심 함수. 위 서명 검증에 더해 **매 호출마다** `prisma.dutyPerson.findUnique({ where: { id: dutyPersonId } })`로 `isActive`를 다시 조회한다. 세션이 무효이거나, 계정이 없거나, `isActive=false`면 `DutyAuthError`를 던진다. `/duty/(protected)/layout.tsx`와 `/api/duty/**` 라우트 핸들러 전체가 서비스 로직 호출 전에 반드시 이 함수를 거친다 — 이 프로젝트에서 세션 검증에 DB 조회가 필수로 포함되는 첫 인증 경로다(관리자 세션은 정반대로 DB 조회가 전혀 없는 무상태 방식, 5장 참고).
+- `login(name, password)`: `name`으로 `DutyPerson`을 조회해 없거나 `isActive=false`면 `DutyAuthError`. 있으면 `verifyDutyPassword(password, record.passwordHash)`로 검증(불일치 시 `DutyAuthError`). 성공하면 `createDutySessionCookieValue({ dutyPersonId: record.id, sessionVersion: record.sessionVersion })`(`lib/auth/dutySession.ts`)를 호출해 세션 쿠키 값을 반환한다.
+- `verifyDutySessionFromRequest(req)`: 요청의 듀티 세션 쿠키를 서명/만료만 검증해 payload를 반환한다(DB 조회 없음, `middleware.ts`처럼 빠른 1차 검증이 필요한 지점에서 사용). `sessionVersion` 대조는 여기서 하지 않는다(DB가 필요하므로 아래 2차 방어선의 몫).
+- `requireActiveDutyPerson(req)`: 이 서비스의 핵심 함수. 위 서명 검증에 더해 **매 호출마다** `prisma.dutyPerson.findUnique({ where: { id: dutyPersonId } })`로 `isActive`와 `sessionVersion`을 다시 조회한다. 세션이 무효이거나, 계정이 없거나, `isActive=false`거나, 조회한 `sessionVersion`이 payload의 값과 다르면(= 발급 이후 비밀번호가 바뀜, 필드가 없는 옛 세션 포함) `DutyAuthError`를 던진다. `/duty/(protected)/layout.tsx`와 `/api/duty/**` 라우트 핸들러 전체가 서비스 로직 호출 전에 반드시 이 함수를 거친다 — 이 프로젝트에서 세션 검증에 DB 조회가 필수로 포함되는 첫 인증 경로다(관리자 세션은 정반대로 DB 조회가 전혀 없는 무상태 방식, 5장 참고).
 - `logout()`: 관리자와 동일하게 DB 세션 테이블이 없으므로 no-op이며, 실제 쿠키 무효화는 route handler가 담당한다.
 
 ### DutyBookingDayService (`lib/services/dutyBookingDayService.ts`, 신규, requirements.md 28.5번)
@@ -395,6 +398,8 @@ model DutyPerson {
   name         String   @unique // 로그인 시 name+password만으로 계정을 특정하므로 유니크(D-36)
   passwordHash String            // "salt:hash"(hex), crypto.scrypt 기반(D-38)
   isActive     Boolean  @default(true)
+  // 비밀번호를 바꾸면 1 증가한다. 세션 payload에 담긴 값과 다르면 그 세션은 무효(D-38 개정 2026-09-10)
+  sessionVersion Int    @default(1)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -630,7 +635,8 @@ model ParticipantCodeExportLog {
 ## 5. 관리자 인증 방식 상세
 
 - 로그인(`POST /api/admin/login`): 요청 body의 password를 환경변수 `ADMIN_PASSWORD`와 비교한다. 타이밍 공격 방지를 위해 단순 `===` 대신 길이를 맞춘 뒤 `crypto.timingSafeEqual`로 비교한다. (해시 저장 방식을 검토했으나, 관리자 1인 체제 + MVP 규모에서는 설정 편의를 우선해 평문 환경변수 유지로 최종 결정. decisions.md D-11/D-13 참고)
-- 세션 payload: `{ role: "admin", iat, exp }` (exp = iat + 24h, 요구사항 21번 만료 예시 반영).
+- 세션 payload: `{ role: "admin", pwFingerprint, iat, exp }` (exp = iat + 24h, 요구사항 21번 만료 예시 반영).
+- `pwFingerprint`는 로그인 시점 `ADMIN_PASSWORD`의 SHA-256 해시(hex)다(decisions.md D-38 개정 2026-09-10). `verifyAdminSessionCookieValue`가 서명/만료 검증을 통과한 뒤 **현재** 환경변수로 다시 계산한 지문과 대조해, 값이 다르거나(= 비밀번호가 바뀜) 필드 자체가 없으면(이 기능 배포 전 발급된 옛 세션) 세션을 무효 처리한다. 해시는 Node의 `crypto`가 아니라 Web Crypto `crypto.subtle.digest`로 계산해 Edge Runtime(`middleware.ts`)에서도 동일하게 동작하며, DB 조회가 없으므로 관리자 세션의 무상태 구조는 그대로 유지된다.
 - 서명: `ADMIN_SESSION_SECRET`(별도 환경변수, `ADMIN_PASSWORD`와 분리)를 키로 HMAC-SHA256 서명. 쿠키 값 형식은 `base64url(payload) + "." + base64url(signature)`.
 - 쿠키 속성: `httpOnly: true`, `secure: true`(프로덕션), `sameSite: "lax"`, `path: "/"`, `maxAge: 60*60*24`.
 - DB 세션 테이블은 두지 않는다(요구사항 확정사항). 로그아웃은 쿠키를 즉시 만료시키는 방식으로 처리(서버 측 블랙리스트 없음 — MVP 범위에서는 24시간 자연 만료로 충분하다고 판단).
@@ -648,11 +654,11 @@ model ParticipantCodeExportLog {
 ### 5-2. 듀티 세션 인증 방식 상세 (`/duty/**`, `/api/duty/**`, requirements.md 28.4번, decisions.md D-38)
 
 - 로그인(`POST /api/duty/login`): 요청 body의 `name`/`password`로 `DutyPerson`을 조회한다. 계정이 없거나 `isActive=false`면 `DutyAuthError`(401). 있으면 `verifyDutyPassword(password, record.passwordHash)`로 검증한다(불일치 시 `DutyAuthError`).
-- 세션 payload: `{ role: "duty", dutyPersonId, iat, exp }`(exp = iat + 24h, 관리자 세션과 동일한 만료).
+- 세션 payload: `{ role: "duty", dutyPersonId, sessionVersion, iat, exp }`(exp = iat + 24h, 관리자 세션과 동일한 만료). `sessionVersion`은 로그인 시점의 `DutyPerson.sessionVersion` 값이다(decisions.md D-38 개정 2026-09-10).
 - 서명: `DUTY_SESSION_SECRET`(별도 환경변수, `ADMIN_SESSION_SECRET`과 분리)를 키로 HMAC-SHA256 서명. 쿠키 값 형식/인코딩은 관리자 세션(`lib/auth/session.ts`)과 동일하게 `base64url(payload) + "." + base64url(signature)`.
 - 쿠키 이름은 관리자와 겹치지 않는 별도 이름(예: `duty_session`)을 쓰며, 속성은 관리자 세션과 동일(`httpOnly: true`, `secure: true`(프로덕션), `sameSite: "lax"`, `path: "/"`).
 - **`middleware.ts`(Edge Runtime)의 역할은 서명/만료 검증까지만이다.** `lib/db/prisma.ts`가 로컬 개발 시 `node:path`를 사용하는 등 Node 런타임을 전제로 하고 있어, 미들웨어(Edge Runtime)에서 직접 `DutyPerson.isActive`를 조회할 수 없다. 서명이 유효하지 않거나 만료됐으면 페이지 요청은 `/duty/login`으로 리다이렉트, API 요청은 401 JSON을 반환한다(관리자 미들웨어와 동일한 실패 처리 패턴).
-- **`isActive` 재검증은 Node 런타임 계층(2차·최종 방어선)에서만 이루어진다.** `/duty/(protected)/layout.tsx`(Server Component)와 `/api/duty/booking-days`, `/api/duty/booking-days/[id]` 두 라우트 핸들러는 실제 서비스 로직 호출 전에 반드시 `DutyAuthService.requireActiveDutyPerson(req)`를 호출해 매 요청마다 DB에서 `isActive`를 다시 확인한다. 계정이 방금 비활성화됐다면, 이미 서명이 유효한 세션을 갖고 있어도 이 단계에서 즉시 `DutyAuthError`(401)로 차단된다.
+- **`isActive`/`sessionVersion` 재검증은 Node 런타임 계층(2차·최종 방어선)에서만 이루어진다.** `/duty/(protected)/layout.tsx`(Server Component)와 `/api/duty/booking-days`, `/api/duty/booking-days/[id]` 두 라우트 핸들러는 실제 서비스 로직 호출 전에 반드시 `DutyAuthService.requireActiveDutyPerson(req)`를 호출해 매 요청마다 DB에서 두 값을 다시 확인한다. 계정이 방금 비활성화됐거나 관리자가 방금 비밀번호를 바꿨다면(→ `sessionVersion` 불일치), 이미 서명이 유효한 세션을 갖고 있어도 이 단계에서 즉시 `DutyAuthError`(401)로 차단된다. 추가 쿼리 없이 기존 재조회 결과에서 필드 하나를 더 대조하는 것이라 비용이 늘지 않는다.
 - 이 이중 구조(미들웨어=무상태 서명 검증, 서비스 계층=상태 기반 DB 재검증)는 관리자 세션이 이미 채택한 "미들웨어 1차 방어 + 라우트 핸들러 방어적 재검증" 패턴(5장 서두)의 연장이지만, 관리자 세션과 달리 재검증 단계에 DB 조회가 실질적으로 필요하다는 점이 다르다(관리자는 재검증도 서명 확인뿐이다).
 
 ---

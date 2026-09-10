@@ -31,6 +31,18 @@ export class AdminAuthError extends AppError {
   }
 }
 
+/**
+ * 401 — 듀티 담당자 로그인 실패/세션 무효/계정 비활성화(requirements.md 28.4번, decisions.md D-38).
+ * AdminAuthError를 재사용하지 않고 별도 클래스를 두는 이유는, 두 세션 체계가 완전히 분리되어 있어
+ * 클라이언트가 error.code로 어느 세션이 문제인지 구분할 수 있어야 하기 때문이다.
+ */
+export class DutyAuthError extends AppError {
+  constructor(message: string = "인증이 필요합니다.") {
+    super("DUTY_AUTH_ERROR", message, 401);
+    this.name = "DutyAuthError";
+  }
+}
+
 /** 404 — 예약일/예약/멤버 없음 */
 export class NotFoundError extends AppError {
   constructor(message: string = "대상을 찾을 수 없습니다.") {

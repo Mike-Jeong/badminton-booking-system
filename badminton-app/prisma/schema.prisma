@@ -71,6 +71,24 @@ model MonthlyMember {
   @@index([year, month, dayOfWeek])
 }
 
+// 듀티 담당자 계정(requirements.md 28번, decisions.md D-36~D-38). 관리자 계정(환경변수 단일 비밀번호)과
+// 완전히 별개의 인증 체계다. 하드 삭제 없음(D-37) — isActive 토글만 제공하므로 BookingDay/ClubDayPattern이
+// 이 모델을 정식 FK(@relation)로 참조해도 삭제로 인한 참조 무결성 문제가 발생하지 않는다(D-36, ClubDayPattern
+// ↔ BookingDay의 약한 참조(D-28)와 대조).
+model DutyPerson {
+  id           String   @id @default(cuid())
+  name         String   @unique // 로그인 시 name+password만으로 계정을 특정하므로 유니크(D-36)
+  passwordHash String            // "salt:hash"(hex), crypto.scrypt 기반(D-38)
+  isActive     Boolean  @default(true)
+  // 비밀번호를 바꾸면 1 증가한다. 세션 payload에 담긴 값과 다르면 그 세션은 무효(D-38 개정 2026-09-10)
+  sessionVersion Int    @default(1)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  bookingDays     BookingDay[]
+  clubDayPatterns ClubDayPattern[]
+}
+
 model ClubDayPattern {
   id                       String    @id @default(cuid())
   name                     String?   // 관리자 식별용, 예: "월요일 A체육관 저녁"
@@ -79,7 +97,11 @@ model ClubDayPattern {
   startTime                String    // "HH:mm"
   endTime                  String    // "HH:mm", startTime보다 늦어야 함
   location                 String
-  dutyPerson               String
+  dutyPerson               String    // 자유 텍스트, 표시용. dutyPersonId 선택 시 그 계정의 name으로 동기화(D-36)
+  dutyPersonId             String?   // nullable FK, DutyPerson 참조(requirements.md 28.3번, decisions.md D-36).
+                                      // 정식 @relation(D-28의 약한 참조와 다름 — DutyPerson은 하드 삭제가 없어
+                                      // 참조 대상이 사라질 일이 없기 때문). 기존 패턴은 전부 null로 남는다.
+  dutyPersonAccount        DutyPerson? @relation(fields: [dutyPersonId], references: [id])
   totalSlots               Int
   annualSlots              Int       @default(0)
   casualSlots              Int       @default(0)
@@ -92,6 +114,7 @@ model ClubDayPattern {
   updatedAt                DateTime  @updatedAt
 
   @@index([dayOfWeek, isActive])
+  @@index([dutyPersonId])
 }
 
 model BookingDay {
@@ -102,7 +125,12 @@ model BookingDay {
   startTime   String   // "HH:mm", Pacific/Auckland 벽시계 표시값(날짜 계산에 관여하지 않음)
   endTime     String   // "HH:mm", startTime보다 늦어야 함
   location    String
-  dutyPerson  String
+  dutyPerson  String   // 자유 텍스트, 표시용. dutyPersonId 선택 시 그 계정의 name으로 동기화(D-36)
+  dutyPersonId String? // nullable FK, DutyPerson 참조(requirements.md 28.3번, decisions.md D-36).
+                        // 정식 @relation(ClubDayPattern.dutyPersonId와 동일한 이유로 약한 참조가 아님).
+                        // 클럽데이 자동 생성(ClubDayGenerationService)이 ClubDayPattern.dutyPersonId를
+                        // 그대로 복사한다. 기존 예약일은 전부 null로 남는다(소급 반영 없음).
+  dutyPersonAccount DutyPerson? @relation(fields: [dutyPersonId], references: [id])
   totalSlots  Int
   annualSlots Int      @default(0)
   casualSlots Int      @default(0)
@@ -121,6 +149,7 @@ model BookingDay {
   // ClubDayGenerationService의 트랜잭션 내 조회로 처리한다(decisions.md D-28, 서비스 레이어 체크).
   @@index([date])
   @@index([clubDayPatternId])
+  @@index([dutyPersonId])
 }
 
 model Booking {
