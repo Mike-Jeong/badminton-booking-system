@@ -70,6 +70,9 @@ export async function generateUpcomingClubDays(now: Date = new Date()): Promise<
             endTime: pattern.endTime,
             location: pattern.location,
             dutyPerson: pattern.dutyPerson,
+            // 듀티 계정 연결도 반드시 함께 복사한다(requirements.md 28.3번, decisions.md D-36).
+            // 이걸 빠뜨리면 크론이 자동 생성하는 대부분의 예약일에 듀티 계정 연결이 생기지 않는다.
+            dutyPersonId: pattern.dutyPersonId,
             totalSlots: pattern.totalSlots,
             annualSlots: pattern.annualSlots,
             casualSlots: pattern.casualSlots,

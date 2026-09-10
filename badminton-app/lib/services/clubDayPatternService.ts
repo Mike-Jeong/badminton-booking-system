@@ -13,6 +13,7 @@ import type { SlotMode } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { ValidationError, NotFoundError } from "@/lib/errors";
 import { assertTimeRange, isValidSlotMode, validateSlots } from "@/lib/validation/bookingSlots";
+import { getAssignableDutyPerson } from "@/lib/services/dutyPersonService";
 
 export interface ClubDayPatternInput {
   name?: string | null;
@@ -22,6 +23,12 @@ export interface ClubDayPatternInput {
   endTime: string; // "HH:mm", startTime보다 늦어야 함
   location: string;
   dutyPerson: string;
+  /**
+   * 듀티 담당자 계정(DutyPerson) FK. 선택 시 dutyPerson 텍스트는 그 계정의 name으로 동기화된다
+   * (requirements.md 28.3번, decisions.md D-36). 이 값은 클럽데이 자동 생성 시 생성되는
+   * BookingDay.dutyPersonId로 그대로 복사된다(ClubDayGenerationService).
+   */
+  dutyPersonId?: string | null;
   totalSlots: number;
   annualSlots?: number;
   casualSlots?: number;
@@ -38,6 +45,8 @@ export interface ClubDayPatternUpdateInput {
   endTime?: string;
   location?: string;
   dutyPerson?: string;
+  /** null을 명시하면 계정 연결을 해제한다(dutyPerson 텍스트는 그대로 유지). */
+  dutyPersonId?: string | null;
   totalSlots?: number;
   annualSlots?: number;
   casualSlots?: number;
@@ -77,6 +86,11 @@ export async function createClubDayPattern(input: ClubDayPatternInput) {
 
   validateSlots({ slotMode, totalSlots, annualSlots, casualSlots });
 
+  // 계정을 선택한 경우 dutyPerson 텍스트를 그 계정의 name으로 맞춰 저장한다(두 값 동기화, D-36).
+  const dutyPersonAccount = input.dutyPersonId
+    ? await getAssignableDutyPerson(input.dutyPersonId)
+    : null;
+
   return prisma.clubDayPattern.create({
     data: {
       name: input.name?.trim() ? input.name.trim() : null,
@@ -85,7 +99,8 @@ export async function createClubDayPattern(input: ClubDayPatternInput) {
       startTime: input.startTime,
       endTime: input.endTime,
       location: input.location.trim(),
-      dutyPerson: input.dutyPerson.trim(),
+      dutyPerson: dutyPersonAccount ? dutyPersonAccount.name : input.dutyPerson.trim(),
+      dutyPersonId: dutyPersonAccount ? dutyPersonAccount.id : null,
       totalSlots,
       annualSlots,
       casualSlots,
@@ -133,6 +148,20 @@ export async function updateClubDayPattern(id: string, input: ClubDayPatternUpda
     throw new ValidationError("듀티 담당자(dutyPerson)는 필수입니다.");
   }
 
+  // 듀티 계정 연결(requirements.md 28.3번, decisions.md D-36). 계정을 선택하면 dutyPerson 텍스트도
+  // 그 계정의 name으로 동기화하고, null을 명시하면 연결만 해제한다(텍스트는 그대로 유지).
+  let dutyPersonId: string | null | undefined;
+  let dutyPersonText = input.dutyPerson !== undefined ? input.dutyPerson.trim() : undefined;
+  if (input.dutyPersonId !== undefined) {
+    if (input.dutyPersonId) {
+      const account = await getAssignableDutyPerson(input.dutyPersonId);
+      dutyPersonId = account.id;
+      dutyPersonText = account.name;
+    } else {
+      dutyPersonId = null;
+    }
+  }
+
   return prisma.clubDayPattern.update({
     where: { id },
     data: {
@@ -142,7 +171,8 @@ export async function updateClubDayPattern(id: string, input: ClubDayPatternUpda
       startTime,
       endTime,
       location: input.location !== undefined ? input.location.trim() : undefined,
-      dutyPerson: input.dutyPerson !== undefined ? input.dutyPerson.trim() : undefined,
+      dutyPerson: dutyPersonText,
+      dutyPersonId,
       totalSlots,
       annualSlots,
       casualSlots,
