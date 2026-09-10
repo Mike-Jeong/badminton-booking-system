@@ -10,13 +10,20 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 type SlotMode = "SEPARATED" | "COMBINED";
 
+/** 듀티 담당자 드롭다운 선택지(requirements.md 28.3번). 등록된 활성 계정만 내려온다. */
+export interface DutyPersonOption {
+  id: string;
+  name: string;
+  isActive: boolean;
+}
+
 const initialState = {
   date: "",
   label: "",
   startTime: "",
   endTime: "",
   location: "",
-  dutyPerson: "",
+  dutyPersonId: "",
   totalSlots: "",
   annualSlots: "",
   casualSlots: "",
@@ -24,7 +31,7 @@ const initialState = {
   isOpen: true,
 };
 
-export function CreateBookingDayForm() {
+export function CreateBookingDayForm({ dutyPersons }: { dutyPersons: DutyPersonOption[] }) {
   const router = useRouter();
   const [form, setForm] = useState(initialState);
   const [error, setError] = useState<string | null>(null);
@@ -41,6 +48,7 @@ export function CreateBookingDayForm() {
 
   const isSeparated = form.slotMode === "SEPARATED";
   const computedTotalSlots = Number(form.annualSlots || 0) + Number(form.casualSlots || 0);
+  const selectedDutyPerson = dutyPersons.find((p) => p.id === form.dutyPersonId) ?? null;
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -65,7 +73,9 @@ export function CreateBookingDayForm() {
           startTime: form.startTime,
           endTime: form.endTime,
           location: form.location,
-          dutyPerson: form.dutyPerson,
+          // 듀티 계정 선택 시 표시용 텍스트(dutyPerson)와 FK(dutyPersonId)를 함께 보낸다(D-36).
+          dutyPerson: selectedDutyPerson?.name ?? "",
+          dutyPersonId: form.dutyPersonId || null,
           totalSlots: isSeparated ? computedTotalSlots : Number(form.totalSlots),
           slotMode: form.slotMode,
           annualSlots: isSeparated ? Number(form.annualSlots || 0) : undefined,
@@ -157,13 +167,25 @@ export function CreateBookingDayForm() {
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="dutyPerson">듀티 담당자</Label>
-            <Input
-              id="dutyPerson"
-              value={form.dutyPerson}
-              onChange={(e) => update("dutyPerson", e.target.value)}
+            <Label htmlFor="dutyPersonId">듀티 담당자</Label>
+            <Select
+              id="dutyPersonId"
+              value={form.dutyPersonId}
+              onChange={(e) => update("dutyPersonId", e.target.value)}
               required
-            />
+            >
+              <option value="">선택하세요</option>
+              {dutyPersons.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </Select>
+            {dutyPersons.length === 0 && (
+              <p className="text-xs text-muted-foreground">
+                등록된 듀티 담당자가 없습니다. &quot;듀티 담당자 관리&quot;에서 먼저 계정을 등록해주세요.
+              </p>
+            )}
           </div>
 
           <div className="space-y-2">

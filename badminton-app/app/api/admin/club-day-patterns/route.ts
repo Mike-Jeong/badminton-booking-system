@@ -39,6 +39,7 @@ export const POST = withApiHandler(async (req: NextRequest) => {
     endTime: body.endTime,
     location: body.location,
     dutyPerson: body.dutyPerson,
+    dutyPersonId: body.dutyPersonId ?? null,
     totalSlots: body.totalSlots,
     annualSlots: body.annualSlots,
     casualSlots: body.casualSlots,

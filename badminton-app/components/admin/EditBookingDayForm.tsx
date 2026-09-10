@@ -17,6 +17,7 @@ export interface EditableBookingDay {
   endTime: string;
   location: string;
   dutyPerson: string;
+  dutyPersonId: string | null;
   totalSlots: number;
   annualSlots: number;
   casualSlots: number;
@@ -24,12 +25,25 @@ export interface EditableBookingDay {
   isOpen: boolean;
 }
 
+/** 듀티 담당자 드롭다운 선택지(requirements.md 28.3번). */
+export interface DutyPersonOption {
+  id: string;
+  name: string;
+  isActive: boolean;
+}
+
 export function EditBookingDayForm({
   bookingDay,
   confirmedCount,
+  dutyPersons,
 }: {
   bookingDay: EditableBookingDay;
   confirmedCount: number;
+  /**
+   * 활성 계정 목록. 현재 값(bookingDay.dutyPersonId)이 이미 비활성화된 계정을 가리키면
+   * 그 계정도 포함되어 내려온다(선택값이 사라지지 않도록, requirements.md 28.3번).
+   */
+  dutyPersons: DutyPersonOption[];
 }) {
   const router = useRouter();
   const [form, setForm] = useState({
@@ -37,7 +51,7 @@ export function EditBookingDayForm({
     startTime: bookingDay.startTime,
     endTime: bookingDay.endTime,
     location: bookingDay.location,
-    dutyPerson: bookingDay.dutyPerson,
+    dutyPersonId: bookingDay.dutyPersonId ?? "",
     totalSlots: String(bookingDay.totalSlots),
     annualSlots: String(bookingDay.annualSlots),
     casualSlots: String(bookingDay.casualSlots),
@@ -55,6 +69,7 @@ export function EditBookingDayForm({
   const computedTotalSlots = Number(form.annualSlots || 0) + Number(form.casualSlots || 0);
   const totalSlotsNum = isSeparated ? computedTotalSlots : Number(form.totalSlots || 0);
   const showOverbookWarning = confirmedCount > totalSlotsNum;
+  const selectedDutyPerson = dutyPersons.find((p) => p.id === form.dutyPersonId) ?? null;
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -69,7 +84,9 @@ export function EditBookingDayForm({
           startTime: form.startTime,
           endTime: form.endTime,
           location: form.location,
-          dutyPerson: form.dutyPerson,
+          // 듀티 계정 선택 시 표시용 텍스트(dutyPerson)와 FK(dutyPersonId)를 함께 보낸다(D-36).
+          dutyPerson: selectedDutyPerson?.name ?? bookingDay.dutyPerson,
+          dutyPersonId: form.dutyPersonId || null,
           totalSlots: isSeparated ? computedTotalSlots : Number(form.totalSlots),
           slotMode: form.slotMode,
           annualSlots: isSeparated ? Number(form.annualSlots || 0) : undefined,
@@ -135,13 +152,32 @@ export function EditBookingDayForm({
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="edit-dutyPerson">듀티 담당자</Label>
-            <Input
-              id="edit-dutyPerson"
-              value={form.dutyPerson}
-              onChange={(e) => update("dutyPerson", e.target.value)}
-              required
-            />
+            <Label htmlFor="edit-dutyPersonId">듀티 담당자</Label>
+            <Select
+              id="edit-dutyPersonId"
+              value={form.dutyPersonId}
+              onChange={(e) => update("dutyPersonId", e.target.value)}
+            >
+              {/* 기존 예약일은 dutyPersonId가 없고 텍스트만 있을 수 있다(소급 반영 없음, D-36).
+                  그 경우 현재 텍스트 값을 "계정 미연결" 선택지로 보여준다. */}
+              <option value="">
+                {bookingDay.dutyPersonId
+                  ? "계정 연결 해제"
+                  : `계정 미연결${bookingDay.dutyPerson ? ` (현재: ${bookingDay.dutyPerson})` : ""}`}
+              </option>
+              {dutyPersons.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                  {p.isActive ? "" : " (비활성)"}
+                </option>
+              ))}
+            </Select>
+            {selectedDutyPerson && !selectedDutyPerson.isActive && (
+              <p className="text-xs text-muted-foreground">
+                현재 배정된 계정은 비활성 상태입니다. 그대로 저장할 수 있지만, 해당 담당자는 듀티
+                화면에 로그인할 수 없습니다.
+              </p>
+            )}
           </div>
 
           <div className="space-y-2">
