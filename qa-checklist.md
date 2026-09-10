@@ -13,6 +13,8 @@
 - [ ] 로그인하지 않은 상태로 관리자 페이지 URL에 직접 접근하면 로그인 페이지로 리다이렉트된다.
 - [ ] 세션 발급 후 24시간이 지나면 세션이 만료되어 재로그인이 요구된다.
 - [ ] 로그아웃 시 세션이 즉시 무효화된다.
+- [x] `ADMIN_PASSWORD` 환경변수 값을 바꾸고 서버를 재시작하면, 그 전에 발급된 세션 쿠키는 즉시 무효가 된다(D-38 개정 2026-09-10 — 세션 payload의 `pwFingerprint`와 현재 비밀번호 지문 대조). 같은 쿠키로 `/api/admin/**` 재요청 시 401(`ADMIN_AUTH_ERROR`), 관리자 페이지는 `/admin/login`으로 307 리다이렉트되며, 새 비밀번호로 다시 로그인하면 정상 동작한다. 옛 비밀번호로의 로그인은 401. 환경변수를 원래 값으로 되돌리고 재시작하면, 그 사이 임시 비밀번호로 발급됐던 세션이 반대로 무효가 된다.
+- [x] `pwFingerprint` 필드가 아예 없는 옛 형식의 관리자 세션(이 기능 배포 전 발급분)도 무효 처리된다 — `ADMIN_SESSION_SECRET`으로 정상 서명했지만 payload에 지문 필드가 없는 쿠키를 만들어 넣으면 `/api/admin/**` 401, 관리자 페이지는 `/admin/login`으로 307.
 - [ ] 일반 사용자 화면에는 관리자 로그인 여부가 노출되지 않는다.
 
 ## 2. 예약일 관리
@@ -304,10 +306,65 @@
 
 ---
 
+## 12-2. 듀티 담당자 계정 및 듀티 전용 화면 (decisions.md D-36~D-38, requirements.md §28) — 검증 2026-09-09, **미해결 결함 1건(예약일 수정 500)**
+
+### 스키마/마이그레이션
+
+- [x] `prisma/migrations/20260909060437_add_duty_person/migration.sql`이 테이블 재생성(RedefineTables)이 아니라 `ALTER TABLE ... ADD COLUMN ... REFERENCES` 형태의 순수 additive 마이그레이션이며, 적용 후 `prisma migrate status`가 "up to date"이고 `prisma migrate diff --from-schema-datasource --to-schema-datamodel`이 빈 마이그레이션(드리프트 없음)을 반환한다. 적용된 DB에서 `BookingDay`/`ClubDayPattern`의 `dutyPersonId` FK(`ON DELETE SET NULL ON UPDATE CASCADE`), `DutyPerson_name_key` 유니크 인덱스, `*_dutyPersonId_idx` 인덱스가 모두 생성됨을 `.schema`/`PRAGMA foreign_key_list`로 확인. 기존 `BookingDay`/`ClubDayPattern` 행은 그대로 남고 `dutyPersonId`만 `NULL`로 추가됨.
+- [x] `npx tsc --noEmit`, `npm run build` 모두 통과(경고/에러 없음).
+
+### 계정 관리 (`/admin/duty-persons`)
+
+- [x] 관리자 화면 상단 내비게이션에 "듀티 담당자 관리" 링크가 있고, 이름+비밀번호로 계정을 등록할 수 있다. 화면에서 직접 등록 확인 + `POST /api/admin/duty-persons` 201.
+- [x] 이미 등록된 이름과 같은 이름으로 등록하면 409(중복) 메시지가 표시되고 등록되지 않는다. 화면에 "이미 등록된 이름입니다: …" 인라인 표시, API는 `CONFLICT` 409. 앞뒤 공백만 다른 이름(`"  이름  "`)도 trim 후 중복으로 판정되어 409.
+- [x] 목록에서 이름 변경, 비밀번호 변경(비워두면 기존 비밀번호 유지), 활성/비활성 토글이 동작한다. 비밀번호 변경 후 이전 비밀번호는 401, 새 비밀번호는 200. 다른 계정 이름으로 개명 시도는 409, 없는 id는 404, 4자 미만 비밀번호는 400.
+- [x] 계정 하드 삭제 버튼/라우트가 존재하지 않는다(D-37 — 비활성화 토글만 제공). 화면 버튼은 "이름/비밀번호 변경"·"비활성화"뿐이고, `DELETE /api/admin/duty-persons/[id]`는 405.
+- [x] 어떤 화면/API 응답에도 `passwordHash`가 노출되지 않는다(DB에도 평문 비밀번호가 저장되지 않고 `salt:hash` 형식으로만 저장된다). 라우트가 `id/name/isActive/createdAt/updatedAt`만 매핑, 관리자 페이지도 `id/name/isActive`만 클라이언트로 내려보냄. DB 조회 결과는 `32자 hex salt : 128자 hex hash` 형식(scrypt).
+
+### 예약일/패턴과의 연결
+
+- [x] 예약일 생성/수정 폼과 클럽데이 패턴 등록/수정 폼의 듀티 담당자 입력이 자유 텍스트가 아니라 활성 계정 드롭다운이다. **생성** 폼은 `required`(계정이 0건이면 "등록된 듀티 담당자가 없습니다…" 안내가 뜨고 생성 불가), **수정** 폼은 `required` 아님(기존 미연결 예약일/패턴 보존). 단, 서버 API는 UI와 무관하게 `dutyPersonId` 없이 `dutyPerson` 텍스트만으로도 생성이 가능하다(의도된 유연성 — `POST /api/admin/booking-days`에 텍스트만 보내 201 확인).
+- [x] 드롭다운에서 계정을 선택해 **생성**하면 `dutyPersonId`와 표시용 `dutyPerson` 텍스트(계정 이름)가 함께 저장된다. 클라이언트가 보낸 텍스트는 신뢰하지 않고 서버가 계정 `name`으로 덮어쓴다 — 예약일/패턴 모두 `dutyPerson:"엉뚱한이름XYZ"` + 올바른 `dutyPersonId`로 POST했을 때 저장값이 계정 이름으로 강제 동기화됨을 확인. 존재하지 않는 `dutyPersonId`는 `VALIDATION_ERROR` 400(FK 위반 500이 아님).
+- [x] 클럽데이 **패턴 수정**(`PATCH /api/admin/club-day-patterns/[id]`)도 동일하게 동기화되고, `dutyPersonId: null`을 보내면 연결만 해제되고 텍스트는 유지된다. 화면에서 드롭다운 선택 후 저장 → 목록 "듀티" 칼럼이 계정 이름으로 갱신됨을 확인.
+- [ ] **(실패)** **예약일 수정**(`PATCH /api/admin/booking-days/[id]`)에 `dutyPersonId`(비어 있지 않은 값)를 보내면 항상 5초 지연 후 500(`INTERNAL_ERROR`)이 난다 → `EditBookingDayForm`은 항상 `dutyPersonId`를 전송하므로, **듀티 계정이 연결된 예약일은 어떤 항목도 수정할 수 없고, 기존 예약일에 듀티 계정을 새로 연결할 수도 없다.** 원인: `updateBookingDay`가 `prisma.$transaction` 내부에서 트랜잭션 밖 클라이언트(`prisma`)를 쓰는 `getAssignableDutyPerson`을 호출해 libSQL/SQLite 잠금 대기 → Prisma P2028(트랜잭션 5초 타임아웃). `dutyPersonId: null`(연결 해제)이나 `dutyPersonId` 키 자체를 보내지 않는 경로는 정상 200.
+- [x] 수정 폼에서 현재 값이 비활성화된 계정을 가리키는 경우, 그 계정이 "(비활성)" 표시와 함께 드롭다운에 남아 있어 선택값이 사라지지 않는다. 배정 후 계정을 비활성화하고 예약일 수정 화면을 열어 옵션 `"QA듀티B (비활성)"`이 현재 선택값으로 유지되고 안내 문구가 함께 표시됨을 확인(클럽데이 패턴 수정 폼도 동일).
+- [x] 계정 연결이 없는 기존 예약일/패턴(소급 반영 없음)은 기존 텍스트 값이 그대로 표시되고, 공개 화면 등 기존 동작에 변화가 없다. 듀티 계정이 0건인 상태에서도 기존 예약일 수정 폼이 `"계정 미연결 (현재: 테스터)"` 선택지를 유지한 채 정상 저장되고, 공개 예약일 상세(`/booking-days/[id]`)의 "듀티 담당자" 값이 그대로 노출됨을 확인.
+- [x] 클럽데이 크론(`/api/cron/club-days`)이 자동 생성한 예약일에 패턴의 `dutyPersonId`가 그대로 복사된다(듀티 화면 목록에 바로 나타난다). 패턴에 계정을 배정하고 크론을 실행해 생성된 `BookingDay`의 `dutyPersonId`/`dutyPerson`이 패턴 값과 일치하고, 해당 계정으로 로그인한 듀티 목록에 즉시 나타남을 확인.
+
+### 로그인/세션 (`/duty/login`)
+
+- [x] 등록된 이름+비밀번호로 로그인하면 `/duty/booking-days`로 이동한다(브라우저 폼으로 확인).
+- [x] 존재하지 않는 이름, 틀린 비밀번호, 비활성 계정 모두 동일한 401 메시지로 거부된다(어느 이름이 존재하는지 노출하지 않음). 세 경우 모두 `DUTY_AUTH_ERROR` + `"이름 또는 비밀번호가 올바르지 않습니다."`. `name`/`password` 누락은 400.
+- [x] 로그인하지 않은 상태로 `/duty/booking-days`에 접근하면 `/duty/login`으로 리다이렉트되고(307), `/api/duty/*`는 401 JSON을 반환한다. 서명이 깨진 쿠키, 관리자 세션 쿠키 값을 `duty_session`에 그대로 넣은 위조 시도도 401(서명 키가 분리되어 있음). `/duty/login`, `/api/duty/login`은 비로그인으로 접근 가능.
+- [x] 듀티 로그인 상태가 관리자 세션과 서로 영향을 주지 않는다. 듀티 세션만 있는 상태로 `/admin/**`·`/api/admin/**`는 401/관리자 로그인 리다이렉트, 관리자 세션만 있는 상태로 `/api/duty/**`는 401. 같은 브라우저에서 두 세션이 동시에 유효하며, 듀티 로그아웃 후에도 관리자 세션은 그대로 살아 있음.
+- [x] **로그인된 상태에서 관리자가 그 계정을 비활성화하면, 다음 요청부터 즉시 차단된다**(매 요청 `isActive` 재조회, D-38). 쿠키를 재발급하지 않고 동일 쿠키로 즉시 재요청 → API 401(`"사용할 수 없는 계정입니다…"`), 페이지는 `/duty/login`으로 307. 다시 활성화하면 같은 쿠키가 다시 통과한다. 계정 레코드 자체가 없어진 경우에도 동일하게 차단됨.
+- [x] 듀티 세션 쿠키(`duty_session`)는 `httpOnly` + `sameSite=lax` + 프로덕션 `secure`이며, 만료는 관리자 세션과 같은 24시간이다(로그아웃 시 `maxAge=0`으로 즉시 무효화 확인).
+- [x] **로그인된 상태에서 관리자가 그 계정의 비밀번호를 변경하면, 다음 요청부터 즉시 차단된다**(`sessionVersion` 대조, D-38 개정 2026-09-10). 동일 쿠키로 재요청 → API 401(`"비밀번호가 변경되었습니다…"`), 페이지는 `/duty/login`으로 307. 새 비밀번호로 다시 로그인하면 정상 동작하고, 이름 변경이나 `isActive` 재활성화 등 비밀번호를 건드리지 않는 수정은 기존 세션을 끊지 않는다. 목록·상세(`/api/duty/booking-days`, `/api/duty/booking-days/[id]`) 양쪽에서 확인. 이름과 비밀번호를 한 번에 바꾸는 경우에도 세션이 끊긴다.
+- [x] 비밀번호 변경으로 인한 차단과 비활성화로 인한 차단이 메시지로 구분된다(`"비밀번호가 변경되었습니다…"` vs `"사용할 수 없는 계정입니다…"`). 단, `error.code`는 둘 다 `DUTY_AUTH_ERROR`로 동일하다 — 클라이언트가 코드만으로는 두 사유를 구분할 수 없다.
+- [x] `sessionVersion` 필드가 아예 없는 옛 형식의 듀티 세션(이 기능 배포 전 발급분)도 무효 처리된다 — `DUTY_SESSION_SECRET`으로 정상 서명했지만 payload에 필드가 없는 쿠키, 그리고 값이 어긋나는 쿠키(`sessionVersion: 999`) 모두 API 401 + 페이지 307.
+- [x] 관리자 세션과 듀티 세션이 비밀번호 변경에 대해 서로 독립적이다. `ADMIN_PASSWORD`를 바꿔 관리자 세션이 무효화돼도 듀티 세션은 그대로 200이고, 듀티 계정 비밀번호를 바꿔 듀티 세션이 무효화돼도 관리자 세션은 그대로 200이다.
+
+### 듀티 화면 (읽기 전용)
+
+- [x] 목록에는 로그인한 계정에 배정된 예약일만 표시되고, 기본 필터가 "오늘부터 미래"이며 필터 초기화/시작 날짜 삭제로 지난 일정도 볼 수 있다. 두 계정으로 각각 로그인해 서로의 예약일이 섞이지 않음을 화면과 `GET /api/duty/booking-days` 양쪽에서 확인.
+- [x] 상세 화면에 예약일 기본 정보와 참여자 명단(이름+상태)이 표시되고, 취소된 예약은 취소선으로 표시된다(확정/대기/취소 인원 요약 포함, 취소 행에 `line-through` 적용 확인).
+- [x] 상세/목록 어디에도 전화번호, 결제 확인 여부/증빙 이미지, 참여자 코드(QR)가 표시되지 않는다(API 응답 JSON에도 해당 필드가 아예 없다). `getBookingDayForDuty`가 `Booking`을 `id/name/status`만 select하며, 상세 API 응답과 렌더된 HTML(RSC 페이로드 포함) 전체에서 전화번호·참여자 코드·`paymentConfirmed`·`phoneEncrypted` 문자열이 하나도 검출되지 않음을 확인.
+- [x] 수정/취소/사진확인 등 어떤 액션 버튼도 없다(순수 조회 전용). 상세 화면의 인터랙티브 요소는 목록으로 돌아가는 링크와 로그아웃 버튼뿐. `/api/duty/booking-days/[id]`에 POST 등 GET 이외 메서드는 405.
+- [x] 자신에게 배정되지 않은 예약일 id로 `/duty/booking-days/[id]`에 직접 접근하면 404가 표시된다(403이 아님, D-38). 다른 계정 배정 건, 아무에게도 배정되지 않은 건, 존재하지 않는 id 모두 동일하게 404/`NOT_FOUND`로 응답해 존재 여부가 구분되지 않음을 확인.
+- [x] 듀티 화면 전체가 한국어로만 표시되고 언어 전환 버튼이 없다(관리자 화면과 동일 취급, D-18).
+
+**QA 환경 제약(2026-09-09)**
+
+- 관리자 로그인 폼에는 실제 `ADMIN_PASSWORD`를 입력하지 않는 기존 QA 정책(10-3 참고)에 따라, 관리자 화면은 `POST /api/admin/login`(curl)으로 발급받은 세션 쿠키를 브라우저에 넣어 조작했다. 듀티 로그인 폼은 QA용으로 새로 만든 임시 계정의 비밀번호로 브라우저에서 직접 입력해 검증했다.
+- 검증에 사용한 듀티 계정 2건, 예약일 5건(크론 자동 생성분 포함), 클럽데이 패턴 1건, 예약 2건은 모두 정리했다.
+
+---
+
 ## 13. 배포 전 최종 점검
 
 - [ ] 환경변수 `ADMIN_PASSWORD`가 Vercel 프로덕션 환경변수에 설정되어 있고, 기본값/예시값이 그대로 남아있지 않다.
 - [ ] 세션 서명용 비밀키(`ADMIN_SESSION_SECRET`)가 설정되어 있고 `ADMIN_PASSWORD`와 별도 값으로 관리된다.
+- [ ] 듀티 세션 서명용 비밀키(`DUTY_SESSION_SECRET`)가 Vercel 프로덕션 환경변수에 설정되어 있고, `ADMIN_SESSION_SECRET`과 다른 값이다(requirements.md §28.4, decisions.md D-38). 누락 시 듀티 로그인/화면 접근이 전부 실패한다.
 - [ ] `PII_SECRET_KEY`가 Vercel 프로덕션 환경변수에 설정되어 있다(전화번호 암/복호화용, 누락 시 전화번호 저장 자체가 실패해야 함).
 - [ ] `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`이 Vercel 프로덕션 환경변수에 설정되어 있고, Turso 대시보드에서 해당 DB가 정상 상태인지 확인한다.
 - [ ] `CRON_SECRET`이 Vercel 프로덕션 환경변수에 설정되어 있고, `vercel.json`의 크론 설정이 Vercel 프로젝트의 Cron Jobs 대시보드에 정상 등록되어 있는지 확인한다(decisions.md D-27).
