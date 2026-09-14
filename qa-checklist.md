@@ -308,6 +308,8 @@
 
 ## 12-2. 듀티 담당자 계정 및 듀티 전용 화면 (decisions.md D-36~D-38, requirements.md §28) — 검증 2026-09-09, **미해결 결함 1건(예약일 수정 500)**
 
+> **재검증 필요 (decisions.md D-39, requirements.md §28.3 개정)**: 이 브랜치가 main에 merge되기 전에 "예약일/패턴당 듀티 담당자 1명" 전제가 "여러 명(N명, 인원 상한 없음)"으로 바뀌었다(단일 FK `dutyPersonId` → 다대다 조인 테이블 `BookingDayDutyPerson`/`ClubDayPatternDutyPerson`). 아래 체크 항목 중 "스키마/마이그레이션", "예약일/패턴과의 연결" 절의 항목들은 단일 선택 드롭다운 시절의 동작을 검증한 것이라 재구현 후 다시 검증해야 한다. 계정 관리(`/admin/duty-persons`)·인증/세션(D-38)·듀티 화면 읽기 전용 원칙 절은 이번 개정의 영향을 받지 않으므로 그대로 유효하다.
+
 ### 스키마/마이그레이션
 
 - [x] `prisma/migrations/20260909060437_add_duty_person/migration.sql`이 테이블 재생성(RedefineTables)이 아니라 `ALTER TABLE ... ADD COLUMN ... REFERENCES` 형태의 순수 additive 마이그레이션이며, 적용 후 `prisma migrate status`가 "up to date"이고 `prisma migrate diff --from-schema-datasource --to-schema-datamodel`이 빈 마이그레이션(드리프트 없음)을 반환한다. 적용된 DB에서 `BookingDay`/`ClubDayPattern`의 `dutyPersonId` FK(`ON DELETE SET NULL ON UPDATE CASCADE`), `DutyPerson_name_key` 유니크 인덱스, `*_dutyPersonId_idx` 인덱스가 모두 생성됨을 `.schema`/`PRAGMA foreign_key_list`로 확인. 기존 `BookingDay`/`ClubDayPattern` 행은 그대로 남고 `dutyPersonId`만 `NULL`로 추가됨.

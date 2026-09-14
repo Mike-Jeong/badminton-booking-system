@@ -321,6 +321,24 @@ DutyPerson {
   @@unique([name])
 }
 
+// 예약일 ↔ 듀티 담당자 계정, 다대다 조인 테이블(28번, decisions.md D-39 — 예약일 하나에 듀티
+// 담당자가 여러 명 배정될 수 있다. 인원 상한 없음). BookingDay가 삭제되면 함께 삭제된다.
+BookingDayDutyPerson {
+  bookingDayId
+  dutyPersonId
+
+  @@id([bookingDayId, dutyPersonId])
+}
+
+// 클럽데이 패턴 ↔ 듀티 담당자 계정, 다대다 조인 테이블(28번, decisions.md D-39). 클럽데이 자동
+// 생성(generateUpcomingClubDays) 시 이 관계 전체가 생성되는 BookingDay로 복사된다.
+ClubDayPatternDutyPerson {
+  clubDayPatternId
+  dutyPersonId
+
+  @@id([clubDayPatternId, dutyPersonId])
+}
+
 ClubDayPattern {
   id
   name                     // optional, 관리자 식별용 자유 텍스트
@@ -329,10 +347,14 @@ ClubDayPattern {
   startTime                // "HH:mm"
   endTime                  // "HH:mm", startTime보다 늦어야 함
   location
-  dutyPerson               // 자유 텍스트, 표시용. dutyPersonId 선택 시 그 계정의 name으로 항상 동기화(28번)
-  dutyPersonId             // nullable, DutyPerson을 가리키는 FK(28번, 신규). 기존 dutyPerson 텍스트 필드는
-                            // 그대로 유지되며 둘은 항상 함께 갱신된다. 기존 패턴 데이터는 소급 반영하지
-                            // 않아 전부 null로 남는다
+  dutyPerson               // 자유 텍스트, 표시용. 듀티 담당자 계정을 1명 이상 선택하면 그 계정들의
+                            // name을 이름순으로 정렬한 뒤 ", "로 이어붙인 값으로 항상 동기화된다(28번,
+                            // decisions.md D-36·D-39). 하나도 선택하지 않으면 관리자가 입력한 텍스트를
+                            // 그대로 저장한다
+  // 듀티 담당자 계정 연결은 더 이상 단일 FK 컬럼이 아니라 ClubDayPatternDutyPerson 조인 테이블로
+  // 표현한다(28번, decisions.md D-39 — 패턴 하나에 듀티 담당자 여러 명 배정 가능, 인원 상한 없음).
+  // 클럽데이 자동 생성 시 이 관계 전체가 생성되는 BookingDay로 복사된다. 기존 패턴 데이터는 소급
+  // 반영하지 않아 배정된 계정이 전혀 없는 상태로 남는다
   totalSlots
   annualSlots
   casualSlots
@@ -353,11 +375,13 @@ BookingDay {
   startTime       // "HH:mm", Pacific/Auckland 벽시계 표시값
   endTime         // "HH:mm", startTime보다 늦어야 함
   location
-  dutyPerson      // 자유 텍스트, 표시용. dutyPersonId 선택 시 그 계정의 name으로 항상 동기화(28번)
-  dutyPersonId    // nullable, DutyPerson을 가리키는 FK(28번, 신규). 기존 dutyPerson 텍스트 필드는 그대로
-                   // 유지되며 둘은 항상 함께 갱신된다. 클럽데이 자동 생성(generateUpcomingClubDays)도
-                   // ClubDayPattern.dutyPersonId를 그대로 복사한다. 기존 예약일(418건 이상)은 소급
-                   // 반영하지 않아 전부 null로 남는다
+  dutyPerson      // 자유 텍스트, 표시용. 듀티 담당자 계정을 1명 이상 선택하면 그 계정들의 name을
+                   // 이름순으로 정렬한 뒤 ", "로 이어붙인 값으로 항상 동기화된다(28번, decisions.md D-36·D-39).
+                   // 하나도 선택하지 않으면 관리자가 입력한 텍스트를 그대로 저장한다
+  // 듀티 담당자 계정 연결은 더 이상 단일 FK 컬럼이 아니라 BookingDayDutyPerson 조인 테이블로
+  // 표현한다(28번, decisions.md D-39 — 예약일 하나에 듀티 담당자 여러 명 배정 가능, 인원 상한 없음).
+  // 클럽데이 자동 생성(generateUpcomingClubDays)은 ClubDayPattern에 연결된 듀티 계정 전원을 그대로
+  // 복사한다. 기존 예약일(418건 이상)은 소급 반영하지 않아 배정된 계정이 전혀 없는 상태로 남는다
   totalSlots
   annualSlots
   casualSlots
@@ -860,7 +884,7 @@ listParticipantCodeExportLogs(limit?: number)
 - SSR과의 하이드레이션 불일치를 피하기 위해 초기 렌더는 항상 빈 값이며, 마운트 이후에만 저장된 값으로 채운다(따라서 값이 채워지기까지 짧은 지연이 있을 수 있다).
 - `BookingForm`은 예약 신청 성공 시에만 저장한다(제출 후 입력칸 자체는 계속 비워, 한 자리에서 여러 명을 연달아 등록하는 기존 흐름은 그대로 유지). `CancelLookup`은 조회 성공 시에만 저장한다.
 
-## 28. 듀티 담당자 계정 및 듀티 전용 화면 (decisions.md D-36~D-38)
+## 28. 듀티 담당자 계정 및 듀티 전용 화면 (decisions.md D-36~D-39)
 
 ### 28.1 목적
 
@@ -869,18 +893,20 @@ listParticipantCodeExportLogs(limit?: number)
 ### 28.2 듀티 담당자 계정 (`DutyPerson`)
 
 - 관리자가 신규 화면 `/admin/duty-persons`에서 계정을 등록(이름+비밀번호)하고, 비밀번호를 변경하거나 활성/비활성을 토글할 수 있다.
-- **하드 삭제는 지원하지 않는다**(확정, decisions.md D-37). `BookingDay.dutyPersonId`/`ClubDayPattern.dutyPersonId`가 이 계정을 참조하므로, 계정을 완전히 지우면 이미 배정된 과거/미래 예약일과의 연결이 끊긴다. 화면의 유일한 비활성화 액션은 `isActive=false` 토글이다(기존 `AnnualMember`(D-07), `ClubDayPattern`(D-29)과 같은 원칙).
+- **하드 삭제는 지원하지 않는다**(확정, decisions.md D-37). `BookingDayDutyPerson`/`ClubDayPatternDutyPerson` 조인 테이블(28.3번, decisions.md D-39)이 이 계정을 참조하므로, 계정을 완전히 지우면 이미 배정된 과거/미래 예약일과의 연결이 끊긴다. 화면의 유일한 비활성화 액션은 `isActive=false` 토글이다(기존 `AnnualMember`(D-07), `ClubDayPattern`(D-29)과 같은 원칙).
 - `DutyPerson.name`에는 유니크 제약을 둔다 — 로그인이 `name`+`password` 조합만으로 계정을 특정하는 방식이라, 이름이 중복되면 로그인 대상을 하나로 특정할 수 없다. 관리자 화면은 등록 시점에 이미 존재하는 이름과 중복되면 등록을 거부한다.
 - 데이터 모델 상세는 17번 참고.
 
-### 28.3 예약일/클럽데이 패턴과의 연결
+### 28.3 예약일/클럽데이 패턴과의 연결 (개정, decisions.md D-39 — 예약일/패턴당 듀티 담당자 여러 명 배정 가능)
 
-- `BookingDay`, `ClubDayPattern` 각각에 `dutyPersonId`(nullable FK, `DutyPerson` 참조)를 신규 추가한다. **기존 `dutyPerson`(자유 텍스트) 필드는 그대로 유지**한다 — 관리자가 드롭다운으로 계정을 선택하면 그 계정의 `name`이 `dutyPerson` 텍스트 필드에도 함께 저장되어 두 값이 항상 동기화된다. 기존에 `dutyPerson` 텍스트만 읽던 화면/로직(공개 예약일 상세 등)은 전혀 수정할 필요가 없다.
-- **기존 데이터는 소급 반영하지 않는다.** 이미 생성된 예약일(418건 이상)과 기존에 등록된 클럽데이 패턴은 모두 `dutyPersonId = null`로 남고, 화면에는 기존 텍스트 값이 그대로 표시된다. 별도의 소급 백필 스크립트는 두지 않는다(YAGNI — 과거 이력이라 문제되지 않음).
-- 관리자 화면(`CreateBookingDayForm`, `EditBookingDayForm`, `ClubDayPatternsPanel`)의 듀티 담당자 입력은 자유 텍스트 입력에서, 등록된 **활성(`isActive=true`) 듀티 계정 중에서 고르는 드롭다운**으로 바뀐다. 선택하면 `dutyPersonId`와 표시용 `dutyPerson` 텍스트가 함께 채워진다.
-  - `EditBookingDayForm`/`ClubDayPatternsPanel`의 수정 폼에서, 현재 값이 이미 비활성화된 계정을 가리키고 있으면(등록 이후 그 계정이 비활성화된 경우) 드롭다운 목록에 그 계정을 예외적으로 포함시켜(비활성 배지 표시) 화면을 열었을 때 현재 선택값이 사라지거나 저장 시 의도치 않게 다른 계정으로 바뀌는 일이 없게 한다.
-- **클럽데이 자동 생성(`generateUpcomingClubDays`)은 `dutyPersonId`도 반드시 함께 복사해야 한다.** 현재 `tx.bookingDay.create`(`lib/services/clubDayGenerationService.ts`)는 `dutyPerson: pattern.dutyPerson` 텍스트만 복사하고 있어, 이 필드를 추가하지 않으면 크론으로 자동 생성되는 대부분의 예약일에 듀티 계정 연결이 전혀 생기지 않는 문제가 생긴다. `dutyPersonId: pattern.dutyPersonId`를 같은 `create` 호출에 반드시 포함한다.
-- 패턴 수정 시 소급 반영하지 않는 기존 정책(25.5번)이 `dutyPersonId`에도 동일하게 적용된다. 새 규칙이 아니라 기존 원칙의 연장이다.
+**카디널리티(확정, decisions.md D-39)**: 예약일(`BookingDay`) 하나, 클럽데이 패턴(`ClubDayPattern`) 하나에 듀티 담당자 계정이 **0명, 1명, 또는 여러 명**(3명 이상도 가능) 배정될 수 있다. 배정 인원에 상한을 두지 않는다.
+
+- `BookingDay`, `ClubDayPattern`과 `DutyPerson`의 관계는 다대다 조인 테이블(`BookingDayDutyPerson`, `ClubDayPatternDutyPerson`, 17번 참고)로 표현한다. **기존 `dutyPerson`(자유 텍스트) 필드는 그대로 유지**한다 — 관리자가 계정을 1명 이상 선택하면, 그 계정들의 `name`을 이름순으로 정렬한 뒤 `", "`로 이어붙인 문자열(예: "김철수, 홍길동")이 `dutyPerson` 텍스트 필드에 서버에 의해 자동으로 저장되어(클라이언트가 보낸 텍스트나 선택 순서는 신뢰하지 않고 항상 서버가 정렬해 덮어씀 — 체크박스를 클릭한 순서에 따라 표시 순서가 매번 달라지는 것을 방지) 두 값이 항상 동기화된다. 계정을 하나도 선택하지 않으면 관리자가 입력한 텍스트를 그대로 저장한다(기존 미연결 상태와 동일한 취급). 기존에 `dutyPerson` 텍스트만 읽던 화면/로직(공개 예약일 상세 등)은 전혀 수정할 필요가 없다.
+- **기존 데이터는 소급 반영하지 않는다.** 이미 생성된 예약일(418건 이상)과 기존에 등록된 클럽데이 패턴은 모두 배정된 듀티 계정이 없는 상태로 남고, 화면에는 기존 텍스트 값이 그대로 표시된다. 별도의 소급 백필 스크립트는 두지 않는다(YAGNI — 과거 이력이라 문제되지 않음).
+- 관리자 화면(`CreateBookingDayForm`, `EditBookingDayForm`, `ClubDayPatternsPanel`)의 듀티 담당자 입력은 자유 텍스트 입력이 아니라, 등록된 **활성(`isActive=true`) 듀티 계정 중에서 여러 명을 고를 수 있는 다중 선택(체크박스 목록 등)**이다. 선택한 계정들의 id 목록이 조인 테이블에 저장되고, 표시용 `dutyPerson` 텍스트가 함께 채워진다.
+  - `EditBookingDayForm`/`ClubDayPatternsPanel`의 수정 폼에서, 현재 이미 배정된 계정 중 비활성화된 계정이 있으면(등록 이후 그 계정이 비활성화된 경우) 선택지 목록에 그 계정을 예외적으로 포함시켜(비활성 배지 표시) 화면을 열었을 때 현재 선택 상태가 사라지거나 저장 시 의도치 않게 배정이 풀리는 일이 없게 한다.
+- **클럽데이 자동 생성(`generateUpcomingClubDays`)은 패턴에 연결된 듀티 담당자 계정 전원을 그대로 복사해야 한다.** 생성되는 `BookingDay`에 대해, 패턴에 배정된 각 계정마다 `BookingDayDutyPerson` 행을 하나씩 만든다(패턴이 0명이면 생성되는 예약일도 0명). 일부만 복사하거나 대표 1명만 복사하는 것은 허용하지 않는다.
+- 패턴 수정 시 소급 반영하지 않는 기존 정책(25.5번)이 듀티 담당자 배정에도 동일하게 적용된다. 새 규칙이 아니라 기존 원칙의 연장이다.
 
 ### 28.4 인증/세션 (decisions.md D-38)
 
@@ -888,11 +914,13 @@ listParticipantCodeExportLogs(limit?: number)
 - 로그인은 `name` + `password` 조합이다. 각 듀티 계정은 관리자가 등록 시 설정한 고유 비밀번호를 가지며(관리자 로그인처럼 앱 전체가 공유하는 단일 비밀번호 방식이 아니다), 비밀번호는 평문이 아니라 해시로 저장한다(`DutyPerson.passwordHash`).
 - 비활성화(`isActive=false`)된 계정은 로그인 자체가 거부된다.
 - **로그인 이후에도 매 요청마다 `isActive`를 다시 확인한다.** 단순히 로그인 시점에만 확인하고 세션 쿠키의 서명/만료만으로 이후 요청을 통과시키면, 관리자가 방금 비활성화한 계정이 이미 발급받은 세션으로 계속 화면을 볼 수 있게 되므로 요구를 만족하지 못한다.
-- 자신에게 배정되지 않은(`dutyPersonId`가 자신이 아닌) 예약일 상세 URL에 직접 접근하면 차단된다.
+- 자신에게 배정되지 않은(조인 테이블에 자신의 `dutyPersonId`로 된 행이 없는, decisions.md D-39 개정) 예약일 상세 URL에 직접 접근하면 차단된다.
 - **비밀번호가 바뀌면 그 계정으로 이미 로그인되어 있던 세션도 즉시 무효화된다**(개정, decisions.md D-38 2026-09-10 개정). 관리자 비밀번호(환경변수)가 바뀌었을 때 기존 관리자 세션도 동일하게 무효화된다.
 
 ### 28.5 듀티 화면 (읽기 전용)
 
-- 목록 `/duty/booking-days`: 로그인한 계정에 배정된(`dutyPersonId` 일치) 예약일만 보여준다. 기본 필터는 "오늘부터 미래"이며, 필터를 초기화하면 지난 날짜도 볼 수 있다 — `CancelLookup`(`components/public/CancelLookup.tsx`)이 이미 쓰는 날짜 필터 UX(기본값, "필터 초기화" 버튼, decisions.md D-24)를 그대로 재사용하는 것을 권장한다.
+- 목록 `/duty/booking-days`: 로그인한 계정이 조인 테이블(`BookingDayDutyPerson`)로 배정되어 있는 예약일만 보여준다. 기본 필터는 "오늘부터 미래"이며, 필터를 초기화하면 지난 날짜도 볼 수 있다 — `CancelLookup`(`components/public/CancelLookup.tsx`)이 이미 쓰는 날짜 필터 UX(기본값, "필터 초기화" 버튼, decisions.md D-24)를 그대로 재사용하는 것을 권장한다.
 - 상세 `/duty/booking-days/[id]`: 예약일 기본 정보(날짜/시간/장소/슬롯 등, 관리자 상세 화면과 유사한 정보)와 참여자 명단(이름 + 상태: 확정/대기/취소, 취소는 관리자 화면처럼 취소선으로 표시)을 보여준다.
 - **전화번호, 결제 확인 여부/증빙 이미지, 참여자 코드(QR) 등은 전혀 노출하지 않는다.** 조회만 가능하며(이름/상태만), 수정/취소/사진확인 등 어떤 액션 버튼도 없다(순수 읽기 전용).
+- **같은 예약일에 듀티 담당자가 2명 이상 배정된 경우(개정, decisions.md D-39)**, 각 계정은 독립적으로 로그인해 이 예약일에 접근하며, 모두 동일한 참여자 명단(이름/상태만)을 본다. 듀티 계정끼리 "이 예약일에 나 말고 누가 더 배정되어 있는지"를 알 수 있는 화면 요소(다른 듀티 담당자 이름 표시 등)는 두지 않는다 — 노출 범위는 참여자 정보(이름/상태만)에 한정되며 이번 개정으로 새로 추가되는 노출은 없다.
+- 자신에게 배정되지 않은 예약일(조인 테이블에 자신의 `dutyPersonId`로 된 행이 없는 경우) 접근 시 404 처리하는 기존 정책(decisions.md D-38)은 그대로 유지된다.
