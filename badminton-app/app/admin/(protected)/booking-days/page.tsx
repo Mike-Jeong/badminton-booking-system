@@ -19,7 +19,7 @@ export const dynamic = "force-dynamic";
 export default async function AdminBookingDaysPage() {
   const [bookingDays, dutyPersons] = await Promise.all([
     listBookingDays({ sort: "desc" }),
-    // 생성 폼의 드롭다운은 활성 계정만 보여준다(requirements.md 28.3번).
+    // 생성 폼의 체크박스 목록은 활성 계정만 보여준다(requirements.md 28.3번, decisions.md D-39).
     listDutyPersons({ activeOnly: true }),
   ]);
 

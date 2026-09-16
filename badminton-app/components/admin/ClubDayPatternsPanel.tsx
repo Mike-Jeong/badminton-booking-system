@@ -16,17 +16,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { DutyPersonMultiSelect, type DutyPersonOption } from "@/components/admin/DutyPersonMultiSelect";
 
 const DAY_LABELS = ["일", "월", "화", "수", "목", "금", "토"];
 
 type SlotMode = "SEPARATED" | "COMBINED";
 
-/** 듀티 담당자 드롭다운 선택지(requirements.md 28.3번). */
-export interface DutyPersonOption {
-  id: string;
-  name: string;
-  isActive: boolean;
-}
+export type { DutyPersonOption };
 
 export interface ClubDayPatternRow {
   id: string;
@@ -37,7 +33,8 @@ export interface ClubDayPatternRow {
   endTime: string;
   location: string;
   dutyPerson: string;
-  dutyPersonId: string | null;
+  /** 현재 배정된 듀티 담당자 계정 id 목록(다중, decisions.md D-39). 체크박스 초기 선택 상태. */
+  dutyPersonIds: string[];
   totalSlots: number;
   annualSlots: number;
   casualSlots: number;
@@ -53,7 +50,7 @@ interface PatternFormState {
   startTime: string;
   endTime: string;
   location: string;
-  dutyPersonId: string;
+  dutyPersonIds: string[];
   totalSlots: string;
   annualSlots: string;
   casualSlots: string;
@@ -69,7 +66,7 @@ const initialCreateForm: PatternFormState = {
   startTime: "",
   endTime: "",
   location: "",
-  dutyPersonId: "",
+  dutyPersonIds: [],
   totalSlots: "",
   annualSlots: "",
   casualSlots: "",
@@ -86,7 +83,7 @@ function toFormState(pattern: ClubDayPatternRow): PatternFormState {
     startTime: pattern.startTime,
     endTime: pattern.endTime,
     location: pattern.location,
-    dutyPersonId: pattern.dutyPersonId ?? "",
+    dutyPersonIds: pattern.dutyPersonIds,
     totalSlots: String(pattern.totalSlots),
     annualSlots: String(pattern.annualSlots),
     casualSlots: String(pattern.casualSlots),
@@ -97,9 +94,10 @@ function toFormState(pattern: ClubDayPatternRow): PatternFormState {
 }
 
 /**
- * 듀티 담당자는 드롭다운으로 계정을 고르고, 서버에는 FK(dutyPersonId)와 표시용 텍스트
- * (dutyPerson)를 함께 보낸다(requirements.md 28.3번, decisions.md D-36).
- * 계정을 고르지 않은 경우(기존 패턴의 미연결 상태 유지) 기존 텍스트를 그대로 보낸다.
+ * 듀티 담당자는 체크박스 다중 선택으로 고르고, 서버에는 선택한 계정 id 목록(dutyPersonIds)을
+ * 통째로 보낸다(requirements.md 28.3번, decisions.md D-39). 표시용 dutyPerson 텍스트는 1명 이상
+ * 선택 시 서버가 이름순으로 정렬해 덮어쓰므로 여기서 보내는 값은 fallback일 뿐이다.
+ * 아무도 고르지 않은 경우(기존 패턴의 미배정 상태 유지) 기존 텍스트를 그대로 보낸다.
  */
 function buildPayload(
   form: PatternFormState,
@@ -110,7 +108,7 @@ function buildPayload(
   const annualSlots = isSeparated ? Number(form.annualSlots || 0) : 0;
   const casualSlots = isSeparated ? Number(form.casualSlots || 0) : 0;
   const totalSlots = isSeparated ? annualSlots + casualSlots : Number(form.totalSlots || 0);
-  const selectedDutyPerson = dutyPersons.find((p) => p.id === form.dutyPersonId) ?? null;
+  const selectedDutyPersons = dutyPersons.filter((p) => form.dutyPersonIds.includes(p.id));
   return {
     name: form.name || null,
     dayOfWeek: Number(form.dayOfWeek),
@@ -118,8 +116,11 @@ function buildPayload(
     startTime: form.startTime,
     endTime: form.endTime,
     location: form.location,
-    dutyPerson: selectedDutyPerson?.name ?? fallbackDutyPersonText,
-    dutyPersonId: form.dutyPersonId || null,
+    dutyPerson:
+      selectedDutyPersons.length > 0
+        ? selectedDutyPersons.map((p) => p.name).join(", ")
+        : fallbackDutyPersonText,
+    dutyPersonIds: form.dutyPersonIds,
     totalSlots,
     slotMode: form.slotMode,
     annualSlots: isSeparated ? annualSlots : undefined,
@@ -135,7 +136,6 @@ function PatternFormFields({
   update,
   dutyPersons,
   currentDutyPersonText,
-  currentDutyPersonId,
 }: {
   idPrefix: string;
   form: PatternFormState;
@@ -143,12 +143,9 @@ function PatternFormFields({
   dutyPersons: DutyPersonOption[];
   /** 수정 폼에서만 전달(undefined면 등록 폼). 수정 대상 패턴의 현재 듀티 담당자 텍스트. */
   currentDutyPersonText?: string;
-  /** 수정 대상 패턴에 원래 연결되어 있던 듀티 계정 FK(없으면 null). 빈 값 선택지 문구 분기에 사용. */
-  currentDutyPersonId?: string | null;
 }) {
   const isSeparated = form.slotMode === "SEPARATED";
   const computedTotalSlots = Number(form.annualSlots || 0) + Number(form.casualSlots || 0);
-  const selectedDutyPerson = dutyPersons.find((p) => p.id === form.dutyPersonId) ?? null;
 
   return (
     <>
@@ -219,44 +216,22 @@ function PatternFormFields({
         />
       </div>
 
-      <div className="space-y-2">
-        <Label htmlFor={`${idPrefix}-dutyPersonId`}>듀티 담당자</Label>
-        <Select
-          id={`${idPrefix}-dutyPersonId`}
-          value={form.dutyPersonId}
-          onChange={(e) => update("dutyPersonId", e.target.value)}
-          required={currentDutyPersonText === undefined}
-        >
-          {/* 기존 패턴은 dutyPersonId가 없고 텍스트만 있을 수 있다(소급 반영 없음, D-36).
-              계정이 이미 연결된 패턴이면 빈 값 선택은 "연결 해제"를 의미하고,
-              원래 미연결이던 패턴이면 현재 텍스트 값을 그대로 유지한다는 의미다.
-              (EditBookingDayForm과 동일한 문구/로직) */}
-          <option value="">
-            {currentDutyPersonText === undefined
-              ? "선택하세요"
-              : currentDutyPersonId
-                ? "계정 연결 해제"
-                : `계정 미연결${currentDutyPersonText ? ` (현재: ${currentDutyPersonText})` : ""}`}
-          </option>
-          {dutyPersons.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-              {p.isActive ? "" : " (비활성)"}
-            </option>
-          ))}
-        </Select>
-        {dutyPersons.length === 0 && (
-          <p className="text-xs text-muted-foreground">
-            등록된 듀티 담당자가 없습니다. &quot;듀티 담당자 관리&quot;에서 먼저 계정을 등록해주세요.
-          </p>
-        )}
-        {selectedDutyPerson && !selectedDutyPerson.isActive && (
-          <p className="text-xs text-muted-foreground">
-            현재 배정된 계정은 비활성 상태입니다. 그대로 저장할 수 있지만, 해당 담당자는 듀티 화면에
-            로그인할 수 없습니다.
-          </p>
-        )}
-      </div>
+      {/* 기존 패턴은 배정된 계정이 없고 텍스트만 있을 수 있다(소급 반영 없음, D-36·D-39).
+          수정 폼에서 아무것도 체크하지 않으면 배정 없이 현재 텍스트가 그대로 유지된다.
+          (EditBookingDayForm과 동일한 문구/로직) */}
+      <DutyPersonMultiSelect
+        idPrefix={idPrefix}
+        options={dutyPersons}
+        selectedIds={form.dutyPersonIds}
+        onChange={(next) => update("dutyPersonIds", next)}
+        emptySelectionHint={
+          currentDutyPersonText === undefined
+            ? undefined
+            : `배정된 계정 없음${
+                currentDutyPersonText ? ` (현재 표시 텍스트: ${currentDutyPersonText})` : ""
+              }`
+        }
+      />
 
       <div className="space-y-2">
         <Label htmlFor={`${idPrefix}-slotMode`}>슬롯 정책</Label>
@@ -362,6 +337,13 @@ export function ClubDayPatternsPanel({
   async function handleCreateSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setCreateError(null);
+
+    // 패턴 등록 시 듀티 담당자는 최소 1명 필요하다(기존 단일 드롭다운의 required와 동일한 정책).
+    if (createForm.dutyPersonIds.length === 0) {
+      setCreateError("듀티 담당자를 한 명 이상 선택해주세요.");
+      return;
+    }
+
     setCreateLoading(true);
     try {
       const res = await fetch("/api/admin/club-day-patterns", {
@@ -536,10 +518,9 @@ export function ClubDayPatternsPanel({
                           form={editForm}
                           update={updateEdit}
                           dutyPersons={dutyPersons.filter(
-                            (p) => p.isActive || p.id === pattern.dutyPersonId
+                            (p) => p.isActive || pattern.dutyPersonIds.includes(p.id)
                           )}
                           currentDutyPersonText={pattern.dutyPerson}
-                          currentDutyPersonId={pattern.dutyPersonId}
                         />
                         <div className="col-span-full flex flex-col items-start gap-2">
                           <div className="flex gap-2">

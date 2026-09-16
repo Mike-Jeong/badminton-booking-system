@@ -47,6 +47,9 @@ export async function generateUpcomingClubDays(now: Date = new Date()): Promise<
 
   const patterns = await prisma.clubDayPattern.findMany({
     where: { isActive: true, deletedAt: null, dayOfWeek: targetDayOfWeek },
+    // 패턴에 배정된 듀티 담당자 계정 전원을 생성되는 예약일에 그대로 복사해야 하므로
+    // 함께 조회한다(decisions.md D-39 — 예전에는 dutyPersonId 컬럼이라 include가 필요 없었다).
+    include: { dutyPersonAssignments: true },
   });
 
   const results: ClubDayGenerationResult[] = [];
@@ -70,9 +73,6 @@ export async function generateUpcomingClubDays(now: Date = new Date()): Promise<
             endTime: pattern.endTime,
             location: pattern.location,
             dutyPerson: pattern.dutyPerson,
-            // 듀티 계정 연결도 반드시 함께 복사한다(requirements.md 28.3번, decisions.md D-36).
-            // 이걸 빠뜨리면 크론이 자동 생성하는 대부분의 예약일에 듀티 계정 연결이 생기지 않는다.
-            dutyPersonId: pattern.dutyPersonId,
             totalSlots: pattern.totalSlots,
             annualSlots: pattern.annualSlots,
             casualSlots: pattern.casualSlots,
@@ -81,6 +81,18 @@ export async function generateUpcomingClubDays(now: Date = new Date()): Promise<
             clubDayPatternId: pattern.id,
           },
         });
+
+        // 듀티 계정 배정도 반드시 함께 복사한다 — 패턴에 배정된 **전원**을 그대로 옮긴다
+        // (requirements.md 28.3번, decisions.md D-39. 일부만/대표 1명만 복사하는 것은 허용하지
+        // 않는다). 이걸 빠뜨리면 크론이 자동 생성하는 대부분의 예약일에 듀티 배정이 생기지 않는다.
+        if (pattern.dutyPersonAssignments.length > 0) {
+          await tx.bookingDayDutyPerson.createMany({
+            data: pattern.dutyPersonAssignments.map((a) => ({
+              bookingDayId: bookingDay.id,
+              dutyPersonId: a.dutyPersonId,
+            })),
+          });
+        }
 
         if (pattern.autoAssignMonthlyMembers) {
           await applyMonthlyMembersToBookingDay(bookingDay.id, tx);

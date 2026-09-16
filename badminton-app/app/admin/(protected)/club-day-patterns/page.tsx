@@ -10,10 +10,10 @@ export default async function AdminClubDayPatternsPage() {
     listDutyPersons(),
   ]);
 
-  // 활성 계정 + (어떤 패턴이 이미 가리키고 있는) 비활성 계정만 드롭다운 선택지로 내려준다
-  // (수정 폼에서 현재 선택값이 사라지지 않도록, requirements.md 28.3번).
+  // 활성 계정 + (어떤 패턴이 이미 배정하고 있는) 비활성 계정만 체크박스 선택지로 내려준다
+  // (수정 폼에서 현재 선택 상태가 사라지지 않도록, requirements.md 28.3번, decisions.md D-39).
   const referencedIds = new Set(
-    patterns.map((p) => p.dutyPersonId).filter((id): id is string => Boolean(id))
+    patterns.flatMap((p) => p.dutyPersonAssignments.map((a) => a.dutyPersonId))
   );
   const dutyPersons = allDutyPersons
     .filter((p) => p.isActive || referencedIds.has(p.id))
@@ -39,7 +39,7 @@ export default async function AdminClubDayPatternsPage() {
           endTime: p.endTime,
           location: p.location,
           dutyPerson: p.dutyPerson,
-          dutyPersonId: p.dutyPersonId,
+          dutyPersonIds: p.dutyPersonAssignments.map((a) => a.dutyPersonId),
           totalSlots: p.totalSlots,
           annualSlots: p.annualSlots,
           casualSlots: p.casualSlots,
