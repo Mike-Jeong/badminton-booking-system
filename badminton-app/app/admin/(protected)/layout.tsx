@@ -28,6 +28,9 @@ export default function AdminProtectedLayout({ children }: { children: React.Rea
             <Link href="/admin/participant-codes" className="text-sm font-semibold">
               참여자 코드 관리
             </Link>
+            <Link href="/admin/duty-persons" className="text-sm font-semibold">
+              듀티 담당자 관리
+            </Link>
           </nav>
           <LogoutButton />
         </div>

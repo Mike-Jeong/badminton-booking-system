@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getBookingDayById } from "@/lib/services/bookingDayService";
 import { listBookingsForAdmin } from "@/lib/services/bookingService";
+import { listDutyPersons } from "@/lib/services/dutyPersonService";
 import { NotFoundError } from "@/lib/errors";
 import { formatDateOnlyInTimeZone, getDayOfWeekLabelKo } from "@/lib/timezone";
 import { EditBookingDayForm } from "@/components/admin/EditBookingDayForm";
@@ -43,6 +44,13 @@ export default async function AdminBookingDayDetailPage({
   const waitingAnnual = waiting.filter((b) => b.memberType === "ANNUAL").length;
   const waitingCasual = waiting.filter((b) => b.memberType === "CASUAL").length;
   const adminBookings = await listBookingsForAdmin(id);
+  // 수정 폼 체크박스 목록: 활성 계정 + (현재 배정된 계정 중 비활성인 것) 을 포함해 현재 선택
+  // 상태가 사라지지 않게 한다(requirements.md 28.3번, decisions.md D-39).
+  const assignedDutyPersonIds = bookingDay.dutyPersonAssignments.map((a) => a.dutyPersonId);
+  const allDutyPersons = await listDutyPersons();
+  const dutyPersonOptions = allDutyPersons
+    .filter((p) => p.isActive || assignedDutyPersonIds.includes(p.id))
+    .map((p) => ({ id: p.id, name: p.name, isActive: p.isActive }));
   // 총 입금 예정 금액(requirements.md 26.7번): CONFIRMED 예약만 합산하며(WAITING/CANCELLED 제외),
   // 이미 결제 확인된 건과 미확인 건을 구분하지 않는다.
   const totalPaymentAmountDue = adminBookings
@@ -143,6 +151,7 @@ export default async function AdminBookingDayDetailPage({
           endTime: bookingDay.endTime,
           location: bookingDay.location,
           dutyPerson: bookingDay.dutyPerson,
+          dutyPersonIds: assignedDutyPersonIds,
           totalSlots: bookingDay.totalSlots,
           annualSlots: bookingDay.annualSlots,
           casualSlots: bookingDay.casualSlots,
@@ -150,6 +159,7 @@ export default async function AdminBookingDayDetailPage({
           isOpen: bookingDay.isOpen,
         }}
         confirmedCount={confirmedCount}
+        dutyPersons={dutyPersonOptions}
       />
 
       <DeleteBookingDayButton id={bookingDay.id} bookingCount={bookingDay.bookings.length} />

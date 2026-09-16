@@ -21,6 +21,7 @@ import {
 import { promoteWaitingBookings } from "@/lib/services/bookingService";
 import { applyMonthlyMembersToBookingDay } from "@/lib/services/monthlyMemberService";
 import type { PrismaClientOrTx } from "@/lib/services/annualMemberService";
+import { getAssignableDutyPersons } from "@/lib/services/dutyPersonService";
 import { assertTimeRange, isValidSlotMode, validateSlots } from "@/lib/validation/bookingSlots";
 
 export interface BookingDayInput {
@@ -30,6 +31,13 @@ export interface BookingDayInput {
   endTime: string; // "HH:mm", startTime보다 늦어야 함
   location: string;
   dutyPerson: string;
+  /**
+   * 배정할 듀티 담당자 계정 id 목록(0명, 1명, N명 모두 가능 — 인원 상한 없음,
+   * requirements.md 28.3번, decisions.md D-39). 1개 이상이면 dutyPerson 텍스트는 그 계정들의
+   * name을 이름순으로 정렬해 ", "로 이어붙인 값으로 서버가 덮어쓴다. 비었거나 미지정이면
+   * input.dutyPerson 텍스트를 그대로 저장한다(배정 0명).
+   */
+  dutyPersonIds?: string[];
   totalSlots: number;
   annualSlots?: number;
   casualSlots?: number;
@@ -44,6 +52,13 @@ export interface BookingDayUpdateInput {
   endTime?: string;
   location?: string;
   dutyPerson?: string;
+  /**
+   * 배정할 듀티 담당자 계정 id 목록(decisions.md D-39). 키 자체가 없으면 기존 배정을 건드리지
+   * 않고(부분 업데이트 원칙), 빈 배열 []을 명시하면 배정을 전부 해제한다(기존에 dutyPersonId: null을
+   * 보내던 것과 동일한 의미). 1개 이상이면 기존 배정을 전부 지우고 통째로 다시 쓰며, dutyPerson
+   * 텍스트도 이름순 결합값으로 동기화한다.
+   */
+  dutyPersonIds?: string[];
   totalSlots?: number;
   annualSlots?: number;
   casualSlots?: number;
@@ -142,21 +157,43 @@ export async function createBookingDay(input: BookingDayInput, options: CreateBo
   const dayOfWeek = getDayOfWeekForDateOnly(input.date);
   const dateValue = dateOnlyToUtcMidnight(input.date);
 
-  const bookingDay = await prisma.bookingDay.create({
-    data: {
-      date: dateValue,
-      dayOfWeek,
-      label: input.label?.trim() ? input.label.trim() : null,
-      startTime: input.startTime,
-      endTime: input.endTime,
-      location: input.location.trim(),
-      dutyPerson: input.dutyPerson.trim(),
-      totalSlots,
-      annualSlots,
-      casualSlots,
-      slotMode,
-      isOpen: input.isOpen ?? true,
-    },
+  const dutyPersonIds = input.dutyPersonIds ?? [];
+
+  // 검증 + 예약일 생성 + 조인 테이블 쓰기를 하나의 트랜잭션으로 묶는다(decisions.md D-39 —
+  // 단일 FK였을 때는 insert 한 번이라 트랜잭션이 필요 없었지만, 두 번째 쓰기가 생기며 필요해졌다).
+  const bookingDay = await prisma.$transaction(async (tx) => {
+    // 계정을 1명 이상 선택한 경우 dutyPerson 텍스트를 그 계정들의 name(이름순)으로 맞춰
+    // 저장한다(두 값 동기화, D-36·D-39). 0명이면 관리자가 입력한 텍스트를 그대로 저장한다.
+    const accounts = await getAssignableDutyPersons(dutyPersonIds, tx);
+
+    const created = await tx.bookingDay.create({
+      data: {
+        date: dateValue,
+        dayOfWeek,
+        label: input.label?.trim() ? input.label.trim() : null,
+        startTime: input.startTime,
+        endTime: input.endTime,
+        location: input.location.trim(),
+        dutyPerson:
+          accounts.length > 0
+            ? accounts.map((a) => a.name).join(", ")
+            : input.dutyPerson.trim(),
+        totalSlots,
+        annualSlots,
+        casualSlots,
+        slotMode,
+        isOpen: input.isOpen ?? true,
+      },
+    });
+
+    if (accounts.length > 0) {
+      await tx.bookingDayDutyPerson.createMany({
+        data: accounts.map((a) => ({ bookingDayId: created.id, dutyPersonId: a.id })),
+      });
+    }
+
+    // 응답 DTO는 단일 dutyPersonId 대신 배정된 계정 배열을 담는다(architecture.md 6장, D-39).
+    return { ...created, dutyPersonIds: accounts.map((a) => a.id), dutyPersons: accounts };
   });
 
   const autoAssign = options.autoAssignMonthlyMembers ?? true;
@@ -208,6 +245,19 @@ export async function updateBookingDay(id: string, input: BookingDayUpdateInput)
       isOpen: input.isOpen,
     };
 
+    // 듀티 계정 배정(requirements.md 28.3번, decisions.md D-39). dutyPersonIds 키 자체가 없으면
+    // 기존 배정을 건드리지 않고, 전달되면 기존 배정을 전부 지운 뒤 통째로 다시 쓴다(diff 계산
+    // 없이 항상 전체 교체 — 단순성 우선). 1개 이상이면 dutyPerson 텍스트도 이름순 결합값으로
+    // 동기화하고, 빈 배열이면 input.dutyPerson으로 보낸 텍스트를 그대로 둔다.
+    // getAssignableDutyPersons에는 반드시 열린 트랜잭션 클라이언트(tx)를 넘긴다(P2028 방지).
+    const nextDutyPersons =
+      input.dutyPersonIds !== undefined
+        ? await getAssignableDutyPersons(input.dutyPersonIds, tx)
+        : null;
+    if (nextDutyPersons !== null && nextDutyPersons.length > 0) {
+      data.dutyPerson = nextDutyPersons.map((a) => a.name).join(", ");
+    }
+
     if (input.label !== undefined) {
       data.label = input.label?.trim() ? input.label.trim() : null;
     }
@@ -222,16 +272,39 @@ export async function updateBookingDay(id: string, input: BookingDayUpdateInput)
 
     const updated = await tx.bookingDay.update({ where: { id }, data });
 
+    if (nextDutyPersons !== null) {
+      await tx.bookingDayDutyPerson.deleteMany({ where: { bookingDayId: id } });
+      if (nextDutyPersons.length > 0) {
+        await tx.bookingDayDutyPerson.createMany({
+          data: nextDutyPersons.map((a) => ({ bookingDayId: id, dutyPersonId: a.id })),
+        });
+      }
+    }
+
     // 슬롯이 늘지 않았어도 다시 계산하는 건 항상 안전하다(승격 가능한 여유가 없으면 그냥 no-op).
     // 모드 전환(SEPARATED<->COMBINED) 등 "증가 여부" 판단이 애매한 경우까지 한 번에 커버한다.
     await promoteWaitingBookings(id, tx);
 
-    return updated;
+    // 응답 DTO는 단일 dutyPersonId 대신 배정된 계정 배열을 담는다(architecture.md 6장, D-39).
+    // dutyPersonIds 키가 없어 기존 배정을 그대로 둔 경우에는 현재 배정을 다시 읽어 담는다.
+    const dutyPersons =
+      nextDutyPersons ??
+      (
+        await tx.bookingDayDutyPerson.findMany({
+          where: { bookingDayId: id },
+          include: { dutyPerson: { select: { id: true, name: true, isActive: true } } },
+          orderBy: { dutyPerson: { name: "asc" } },
+        })
+      ).map((a) => a.dutyPerson);
+
+    return { ...updated, dutyPersonIds: dutyPersons.map((a) => a.id), dutyPersons };
   });
 }
 
 /**
- * 예약일 삭제(decisions.md D-17). 확정/대기(CONFIRMED/WAITING) 중인 예약이 하나라도 있으면
+ * 예약일 삭제(decisions.md D-17). BookingDayDutyPerson 조인 테이블은 BookingDay에 대해
+ * onDelete: Cascade가 걸려 있으므로(D-39) 배정 행은 DB가 함께 지운다(별도 deleteMany 불필요).
+ * 확정/대기(CONFIRMED/WAITING) 중인 예약이 하나라도 있으면
  * 막고, 관리자가 먼저 취소 처리하도록 안내한다. CANCELLED 이력만 있는 경우(또는 예약이
  * 전혀 없는 경우)는 삭제를 허용하며, 그 CANCELLED 기록도 예약일과 함께 정리한다 —
  * 예약이 하나도 활성 상태가 아닌 예약일을 영구히 지울 수 없게 되는 것을 막기 위함이다.
@@ -281,6 +354,9 @@ export async function getBookingDayById(id: string) {
   const bookingDay = await prisma.bookingDay.findUnique({
     where: { id },
     include: {
+      // 수정 폼(EditBookingDayForm)의 체크박스 초기 선택 상태 렌더링용(decisions.md D-39).
+      // 공개 화면은 dutyPerson 텍스트만 쓰므로 이 관계를 조회하지 않는다.
+      dutyPersonAssignments: { include: { dutyPerson: true } },
       bookings: {
         // CANCELLED는 제외한다 — 이 목록은 DeleteBookingDayButton의 "N건의 예약이 연결되어
         // 있습니다" 경고에도 쓰이는데(decisions.md D-17, 취소된 예약은 삭제 차단 대상이 아님),

@@ -7,8 +7,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { DutyPersonMultiSelect, type DutyPersonOption } from "@/components/admin/DutyPersonMultiSelect";
 
 type SlotMode = "SEPARATED" | "COMBINED";
+
+export type { DutyPersonOption };
 
 const initialState = {
   date: "",
@@ -16,7 +19,8 @@ const initialState = {
   startTime: "",
   endTime: "",
   location: "",
-  dutyPerson: "",
+  /** 배정할 듀티 담당자 계정 id 목록(다중 선택, decisions.md D-39). */
+  dutyPersonIds: [] as string[],
   totalSlots: "",
   annualSlots: "",
   casualSlots: "",
@@ -24,7 +28,7 @@ const initialState = {
   isOpen: true,
 };
 
-export function CreateBookingDayForm() {
+export function CreateBookingDayForm({ dutyPersons }: { dutyPersons: DutyPersonOption[] }) {
   const router = useRouter();
   const [form, setForm] = useState(initialState);
   const [error, setError] = useState<string | null>(null);
@@ -41,12 +45,19 @@ export function CreateBookingDayForm() {
 
   const isSeparated = form.slotMode === "SEPARATED";
   const computedTotalSlots = Number(form.annualSlots || 0) + Number(form.casualSlots || 0);
+  const selectedDutyPersons = dutyPersons.filter((p) => form.dutyPersonIds.includes(p.id));
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError(null);
     setAssignmentResult(null);
     setAssignmentSkipped(false);
+
+    // 예약일 생성 시 듀티 담당자는 최소 1명 필요하다(기존 단일 드롭다운의 required와 동일한 정책).
+    if (form.dutyPersonIds.length === 0) {
+      setError("듀티 담당자를 한 명 이상 선택해주세요.");
+      return;
+    }
 
     // 같은 요일에 세션이 여러 개 열리는 경우 월 멤버가 모든 세션에 중복 배정되는 것을
     // 막기 위해, 생성 시점에 자동 배정 여부를 관리자에게 직접 확인한다(decisions.md D-19).
@@ -65,7 +76,10 @@ export function CreateBookingDayForm() {
           startTime: form.startTime,
           endTime: form.endTime,
           location: form.location,
-          dutyPerson: form.dutyPerson,
+          // 선택한 계정 id 목록을 보낸다(다중 배정, D-39). 표시용 dutyPerson 텍스트는 서버가
+          // 이름순으로 정렬해 덮어쓰므로 여기서 보내는 값은 fallback일 뿐이다.
+          dutyPerson: selectedDutyPersons.map((p) => p.name).join(", "),
+          dutyPersonIds: form.dutyPersonIds,
           totalSlots: isSeparated ? computedTotalSlots : Number(form.totalSlots),
           slotMode: form.slotMode,
           annualSlots: isSeparated ? Number(form.annualSlots || 0) : undefined,
@@ -156,15 +170,12 @@ export function CreateBookingDayForm() {
             />
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="dutyPerson">듀티 담당자</Label>
-            <Input
-              id="dutyPerson"
-              value={form.dutyPerson}
-              onChange={(e) => update("dutyPerson", e.target.value)}
-              required
-            />
-          </div>
+          <DutyPersonMultiSelect
+            idPrefix="create-booking-day"
+            options={dutyPersons}
+            selectedIds={form.dutyPersonIds}
+            onChange={(next) => update("dutyPersonIds", next)}
+          />
 
           <div className="space-y-2">
             <Label htmlFor="slotMode">슬롯 정책</Label>

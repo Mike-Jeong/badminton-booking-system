@@ -31,6 +31,19 @@ app/
                                        # 이력 + CSV 다운로드 버튼 (신규, requirements.md 27번, decisions.md D-34
                                        # 개정 1·2). 등록/수정/삭제 같은 일반 CRUD는 없다(파생 데이터, YAGNI) —
                                        # 유일한 쓰기 액션은 제외 토글뿐이라 다른 관리 화면과는 성격이 다르다
+    duty-persons/page.tsx             # 듀티 담당자 계정 목록/등록/비밀번호 변경/활성-비활성 토글 (신규,
+                                       # requirements.md 28.2번, decisions.md D-36·D-37). 하드 삭제 UI 없음
+                                       # (예약일/패턴에 배정된 계정 여러 명을 다루는 다중 선택 UI는
+                                       # 이 화면이 아니라 예약일/패턴 생성·수정 폼 쪽에 있다, D-39)
+  duty/                                # 듀티 담당자 전용 화면 (신규, requirements.md 28번). admin/과 완전히
+                                       # 분리된 별도 인증 체계 — 관리자 세션 미들웨어 보호 대상이 아니다
+    login/page.tsx                    # name+password 로그인 폼
+    (protected)/
+      layout.tsx                      # duty 세션 서명 검증 + DutyPerson.isActive DB 재조회(매 요청,
+                                       # decisions.md D-38). 비활성/세션무효 시 /duty/login으로 리다이렉트
+      booking-days/page.tsx           # 목록. 기본 필터 "오늘부터 미래"(CancelLookup과 동일한 날짜 필터
+                                       # UX 재사용 권장, decisions.md D-24)
+      booking-days/[id]/page.tsx      # 상세. 기본 정보 + 참여자 명단(이름/상태만, 읽기 전용, 액션 없음)
   api/
     booking-days/route.ts             # GET (공개 목록)
     booking-days/[id]/route.ts        # GET (공개 상세)
@@ -63,7 +76,17 @@ app/
     admin/participant-codes/route.ts         # GET, 목록 + 총 건수 + 최근 내보내기 이력 (신규, requirements.md 27.5번)
     admin/participant-codes/export/route.ts  # GET, CSV 다운로드 + 내보내기 이력 기록 (신규, requirements.md 27.5번)
     admin/participant-codes/[id]/route.ts    # PATCH(excludedFromExport 토글)/DELETE(완전 삭제) (신규, requirements.md 27.5.2·27.5.4번)
+    admin/duty-persons/route.ts       # GET(목록), POST(등록) (신규, requirements.md 28.2번)
+    admin/duty-persons/[id]/route.ts  # PATCH(이름/비밀번호 변경, isActive 토글) — 하드 삭제 없음(D-37) (신규)
     admin/dashboard/route.ts          # GET
+    duty/login/route.ts               # POST, name+password 검증 → 듀티 세션 쿠키 발급 (신규, requirements.md 28.4번,
+                                       # decisions.md D-38). /api/admin/* 미들웨어 보호 대상이 아니다
+    duty/logout/route.ts              # POST, 듀티 세션 쿠키 무효화 (신규)
+    duty/booking-days/route.ts        # GET, 로그인한 계정이 조인 테이블(BookingDayDutyPerson)로 배정된
+                                       # 예약일 목록 (신규, requirements.md 28.5번, decisions.md D-39).
+                                       # 매 요청 DutyPerson.isActive 재검증(D-38)
+    duty/booking-days/[id]/route.ts   # GET, 상세(기본정보+참여자 이름/상태만). 배정되지 않은 id는 404
+                                       # (NotFoundError, decisions.md D-38·D-39) (신규)
   layout.tsx
   globals.css
 
@@ -85,6 +108,18 @@ lib/
                                   # decisions.md D-31·D-32)
     participantCodeService.ts    # ensureParticipantCode(단건)/ensureParticipantCodesBatch(배치),
                                   # listParticipantCodesForExport (신규, requirements.md 27번, decisions.md D-33·D-34)
+    dutyPersonService.ts         # 관리자 전용 DutyPerson CRUD(하드 삭제 없음) + 예약일/패턴에 배정할
+                                  # 계정 목록 검증(다건, D-39) (신규, requirements.md 28.2·28.3번,
+                                  # decisions.md D-36·D-37·D-39)
+    dutyAuthService.ts           # login(name,password)/logout, verifyDutySessionFromRequest(서명만),
+                                  # requireActiveDutyPerson(서명 검증 + DB에서 isActive 재조회, 이 프로젝트
+                                  # 최초의 "매 요청 DB 재검증" 인증 경로) (신규, requirements.md 28.4번,
+                                  # decisions.md D-38)
+    dutyBookingDayService.ts     # listBookingDaysForDuty(dutyPersonId), getBookingDayForDuty(id,
+                                  # dutyPersonId) — 조인 테이블(BookingDayDutyPerson) 기준으로 배정 여부를
+                                  # 판단한다(D-39, 예약일 하나에 듀티 담당자 여러 명 가능). 참여자
+                                  # 이름/상태만 반환(전화번호·결제·참여자 코드 제외) (신규, requirements.md
+                                  # 28.5번, decisions.md D-39)
   validation/
     bookingSlots.ts             # assertTimeRange/validateSlots — bookingDayService.ts에서 추출해 공유
                                  # (신규, clubDayPatternService도 동일 검증 규칙을 재사용하기 위함)
@@ -98,8 +133,15 @@ lib/
                                 # localStorage 캐싱, BookingForm·CancelLookup 공유 (신규, requirements.md 27.6번)
   security/
     phoneCrypto.ts             # hashPhone(HMAC-SHA256), encryptPhone/decryptPhone(AES-256-GCM), PII_SECRET_KEY 기반
+    dutyPasswordCrypto.ts       # hashDutyPassword/verifyDutyPassword — Node 내장 crypto.scrypt, 계정마다
+                                # 무작위 salt 생성, "salt:hash"(hex) 문자열로 저장(신규, requirements.md
+                                # 28.4번, decisions.md D-38)
   auth/
     session.ts                # 쿠키 서명(sign)/검증(verify), payload 정의
+    dutySession.ts             # 듀티 세션 쿠키 서명(sign)/검증(verify) — session.ts와 동일하게 Web Crypto
+                                # (crypto.subtle)만 사용해 Edge Runtime(middleware.ts)과 Node 런타임 양쪽에서
+                                # 동작. payload: { role: "duty", dutyPersonId, sessionVersion, iat, exp } (신규,
+                                # requirements.md 28.4번, decisions.md D-38)
     cronAuth.ts                # assertCronSecret(req) — CRON_SECRET Authorization 헤더 검증 (신규)
   errors.ts                    # AppError 및 하위 에러 클래스, 응답 포맷터
   http.ts                      # route handler 공통 wrapper(try/catch → 응답 포맷)
@@ -111,12 +153,26 @@ components/
                                 # 이력 표시 (신규, requirements.md 27.5번, decisions.md D-34 개정 1·2).
                                 # AnnualMembersPanel과 동일한 클라이언트 컴포넌트 패턴(목록은 서버
                                 # 컴포넌트가 props로 전달, 토글 액션만 fetch + router.refresh())
+    DutyPersonsPanel.tsx        # 듀티 담당자 계정 목록 테이블 + 등록 폼 + 비밀번호 변경 + 활성/비활성
+                                # 토글 (신규, requirements.md 28.2번). ParticipantCodesPanel과 동일한
+                                # 클라이언트 컴포넌트 패턴(fetch + router.refresh())
   public/                      # 사용자 화면 전용 컴포넌트
     ParticipantQrButton.tsx    # "QR 저장하기" 버튼. code(string) prop을 받아 클릭 시 qrcode를
                                 # 동적 임포트해 PNG로 렌더링 후 다운로드 (신규, requirements.md 27.4번,
                                 # decisions.md D-35). BookingForm/CancelLookup 양쪽에서 재사용
+  duty/                        # 듀티 전용 화면 컴포넌트 (신규, requirements.md 28.5번)
+    DutyLoginForm.tsx           # name+password 로그인 폼
+    DutyBookingDayListView.tsx  # 목록. CancelLookup의 날짜 필터 UX(기본값 오늘~무제한, "필터 초기화")를
+                                # 재사용 권장(decisions.md D-24)
+    DutyBookingDayDetailView.tsx # 상세. 기본 정보 카드 + 참여자 명단 테이블(이름/상태만, 취소는 취소선).
+                                # 액션 버튼 없음(순수 읽기 전용)
+    DutyLogoutButton.tsx        # duty_session 쿠키만 무효화(관리자 세션에는 영향 없음).
+                                # components/admin/LogoutButton.tsx와 같은 패턴
 
-middleware.ts                  # /admin/*, /api/admin/* 보호 (로그인 라우트 제외)
+middleware.ts                  # /admin/*, /api/admin/*, /duty/*, /api/duty/* 보호 (각 로그인 라우트 제외).
+                                # /duty/*, /api/duty/*는 관리자 세션과는 별개로 듀티 세션 쿠키의 서명/만료만
+                                # 검사한다(1차 방어선) — DutyPerson.isActive 재검증(2차·최종 방어선)은 Node
+                                # 런타임인 (protected) 레이아웃/라우트 핸들러가 담당한다(decisions.md D-38)
 
 prisma/
   schema.prisma
@@ -128,7 +184,7 @@ scripts/
                                   # 앱 실행 경로가 아니므로 수동으로 1회 실행한다(아래 2장 서비스 설명,
                                   # deployment.md 2장 참고)
 
-.env                            # ADMIN_PASSWORD, ADMIN_SESSION_SECRET,
+.env                            # ADMIN_PASSWORD, ADMIN_SESSION_SECRET, DUTY_SESSION_SECRET(신규),
                                  # TURSO_DATABASE_URL, TURSO_AUTH_TOKEN, PII_SECRET_KEY, CRON_SECRET
 
 vercel.json                    # crons 설정 (신규, deployment.md 참고)
@@ -150,10 +206,10 @@ vercel.json                    # crons 설정 (신규, deployment.md 참고)
 - `logout()`: 쿠키 무효화
 
 ### BookingDayService (`lib/services/bookingDayService.ts`)
-- `createBookingDay(input)`: dayOfWeek 자동 계산(Pacific/Auckland 기준), slotMode별 슬롯 합 검증, 생성 후 `applyMonthlyMembersToBookingDay` 호출
-- `updateBookingDay(id, input)`: 슬롯 수 변경 시 `promoteWaitingBookings` 호출. 새 슬롯 수(분리 모드면 `annualSlots`/`casualSlots` 각각)가 현재 확정(CONFIRMED) 인원보다 작으면 `ValidationError`로 저장 자체를 거부한다(decisions.md D-15, 강제 하향 없음)
-- `deleteBookingDay(id)`
-- `listBookingDays(filter)` / `getBookingDayById(id)`
+- `createBookingDay(input)`: dayOfWeek 자동 계산(Pacific/Auckland 기준), slotMode별 슬롯 합 검증, 생성 후 `applyMonthlyMembersToBookingDay` 호출. `input.dutyPersonIds?: string[]`(개정, decisions.md D-39 — 기존 단일 `dutyPersonId?: string | null`을 대체)가 1개 이상이면 `getAssignableDutyPersons(dutyPersonIds)`로 검증 후(이름순 정렬되어 반환됨) 그 계정들의 `name`을 `", "`로 이어붙여 `dutyPerson` 텍스트에 저장하고, 생성된 `BookingDay.id`로 `prisma.bookingDayDutyPerson.createMany({ data: dutyPersonIds.map(id => ({ bookingDayId, dutyPersonId: id })) })`를 호출한다(같은 흐름을 원자적으로 묶기 위해 `BookingDay` 생성 + 검증 + `createMany`를 `prisma.$transaction`으로 감싼다 — 기존에는 단일 FK라 별도 트랜잭션이 필요 없었지만 두 단계 쓰기가 생겨 새로 필요해짐). `dutyPersonIds`가 비어 있거나 없으면 `input.dutyPerson` 텍스트를 그대로 저장한다(기존 "미연결 시 텍스트 유지" 동작의 연장).
+- `updateBookingDay(id, input)`: 슬롯 수 변경 시 `promoteWaitingBookings` 호출. 새 슬롯 수(분리 모드면 `annualSlots`/`casualSlots` 각각)가 현재 확정(CONFIRMED) 인원보다 작으면 `ValidationError`로 저장 자체를 거부한다(decisions.md D-15, 강제 하향 없음). `input.dutyPersonIds`가 전달된 경우(키 자체가 없으면 기존 배정을 건드리지 않음 — 부분 업데이트 원칙), 이미 열려 있는 트랜잭션(`tx`) 안에서 `getAssignableDutyPersons(dutyPersonIds, tx)`로 검증한 뒤 `tx.bookingDayDutyPerson.deleteMany({ where: { bookingDayId: id } })`로 기존 배정을 전부 지우고 `tx.bookingDayDutyPerson.createMany(...)`로 새 배정을 통째로 다시 쓴다(diff 계산 없이 항상 전체 교체 — 단순성 우선). 빈 배열을 명시적으로 보내면 배정을 전부 해제한다(기존에 `dutyPersonId: null`을 보내던 것과 동일한 의미). `dutyPersonIds`가 1개 이상이면 `dutyPerson` 텍스트도 함께 동기화하고, 빈 배열이면 `input.dutyPerson`으로 보낸 텍스트를 그대로 둔다(decisions.md D-39).
+- `deleteBookingDay(id)`: `BookingDayDutyPerson` 조인 테이블에 `BookingDay`에 대해 `onDelete: Cascade`가 걸려 있어(D-39), 이 함수가 `tx.bookingDay.delete(...)`를 호출하면 관련 배정 행은 별도 `deleteMany` 없이 DB가 자동으로 함께 삭제한다.
+- `listBookingDays(filter)` / `getBookingDayById(id)`: 목록/상세 응답에 배정된 듀티 담당자 계정 목록이 필요하면(예: 수정 폼 초기값) `include: { dutyPersonAssignments: { include: { dutyPerson: true } } }`로 함께 조회한다. 공개 화면은 여전히 `dutyPerson` 텍스트 필드만 사용하므로 이 관계를 조회할 필요가 없다.
 
 ### BookingService (`lib/services/bookingService.ts`)
 - `determineMemberType(name, phone)` — 실제로는 연 멤버 조회가 필요하므로 AnnualMemberService에 위치(아래 참고). BookingService는 이 결과를 소비만 한다.
@@ -179,19 +235,19 @@ vercel.json                    # crons 설정 (신규, deployment.md 참고)
 - `createMonthlyMembersBulk`는 여러 요일을 한 번에 등록할 때 쓰며, 요일별로 `createMonthlyMember`를 호출해 일부 요일이 중복이어도 나머지는 정상 등록되는 부분 성공을 허용한다(decisions.md D-25).
 
 ### ClubDayPatternService (`lib/services/clubDayPatternService.ts`, 신규)
-- `createClubDayPattern(input)`: `dayOfWeek`(0~6) 검증, `lib/validation/bookingSlots.ts`의 `assertTimeRange`/`validateSlots`를 재사용해 시간·슬롯 검증(`bookingDayService.createBookingDay`와 동일 규칙). `isActive` 기본값 `true`, `autoAssignMonthlyMembers` 기본값 `true`(decisions.md D-30).
-- `updateClubDayPattern(id, input)`: 전달된 필드만 갱신(부분 업데이트). `isActive` 토글도 이 함수로 처리한다(별도 activate/deactivate 함수 없음, `updateMonthlyMember`와 동일 패턴).
-- `deleteClubDayPattern(id)`: **물리적 삭제 없음**(decisions.md D-29). `deletedAt = new Date()`, `isActive = false`를 저장한다. `prisma.clubDayPattern.delete(...)`는 호출하지 않는다.
-- `listClubDayPatterns()`: 기본적으로 `deletedAt: null`인 패턴만 반환(삭제된 패턴은 목록에서 제외). 삭제된 패턴을 다시 조회하는 옵션은 이번 범위에 포함하지 않는다(YAGNI, 필요 시 추후 추가).
+- `createClubDayPattern(input)`: `dayOfWeek`(0~6) 검증, `lib/validation/bookingSlots.ts`의 `assertTimeRange`/`validateSlots`를 재사용해 시간·슬롯 검증(`bookingDayService.createBookingDay`와 동일 규칙). `isActive` 기본값 `true`, `autoAssignMonthlyMembers` 기본값 `true`(decisions.md D-30). `input.dutyPersonIds?: string[]`(개정, decisions.md D-39 — 기존 단일 `dutyPersonId?: string | null` 대체)는 `BookingDayService.createBookingDay`와 동일한 검증/동기화/트랜잭션 패턴을 따른다 — `getAssignableDutyPersons`로 검증 후 `dutyPerson` 텍스트를 `", "`로 이어붙여 동기화하고, 패턴 생성 + `prisma.clubDayPatternDutyPerson.createMany(...)`를 하나의 `prisma.$transaction`으로 묶는다.
+- `updateClubDayPattern(id, input)`: 전달된 필드만 갱신(부분 업데이트). `isActive` 토글도 이 함수로 처리한다(별도 activate/deactivate 함수 없음, `updateMonthlyMember`와 동일 패턴). `input.dutyPersonIds`가 전달된 경우 `BookingDayService.updateBookingDay`와 동일하게 기존 배정을 전부 지우고 새로 통째로 쓴다(`deleteMany` + `createMany`, 트랜잭션으로 묶음 — 기존 `updateClubDayPattern`은 트랜잭션을 쓰지 않았으므로 이번에 새로 감싸야 한다). 키 자체가 없으면 기존 배정은 그대로 둔다.
+- `deleteClubDayPattern(id)`: **물리적 삭제 없음**(decisions.md D-29). `deletedAt = new Date()`, `isActive = false`를 저장한다. `prisma.clubDayPattern.delete(...)`는 호출하지 않으므로 `ClubDayPatternDutyPerson`의 삭제 제약(cascade 없음, D-39)이 이 경로에서 문제될 일 자체가 없다.
+- `listClubDayPatterns()`: 기본적으로 `deletedAt: null`인 패턴만 반환(삭제된 패턴은 목록에서 제외). 삭제된 패턴을 다시 조회하는 옵션은 이번 범위에 포함하지 않는다(YAGNI, 필요 시 추후 추가). 관리자 화면(다중 선택 초기값)에 필요하면 `include: { dutyPersonAssignments: { include: { dutyPerson: true } } }`로 함께 조회한다.
 - 검증 로직(시간 범위, 슬롯 합)을 중복 구현하지 않기 위해, `bookingDayService.ts`에 있던 private 함수 `assertTimeRange`/`validateSlots`를 `lib/validation/bookingSlots.ts`로 추출해 `export`하고, `bookingDayService.ts`와 `clubDayPatternService.ts` 양쪽에서 import해 사용하도록 리팩터링한다.
 
 ### ClubDayGenerationService (`lib/services/clubDayGenerationService.ts`, 신규)
 - `generateUpcomingClubDays(now: Date = new Date())`: 크론(`GET /api/cron/club-days`)이 호출하는 핵심 함수(decisions.md D-27 개정 전 이름은 `generateTodaysClubDays`였다).
   1. `formatDateOnlyInTimeZone(now)`(`lib/timezone.ts`)로 실행 시점의 Pacific/Auckland 기준 "오늘" 날짜를 구하고, `addDaysToDateOnly(..., 2)`로 2일을 더해 생성 대상 날짜("모레")를 계산한 뒤 `getDayOfWeekForDateOnly`로 그 날짜의 요일을 구한다(decisions.md D-27 개정 — 회원이 예약할 시간을 최소 이틀 확보).
-  2. `prisma.clubDayPattern.findMany({ where: { isActive: true, deletedAt: null, dayOfWeek: targetDayOfWeek } })`로 대상 날짜(모레)에 대해 생성할 패턴을 조회한다.
+  2. `prisma.clubDayPattern.findMany({ where: { isActive: true, deletedAt: null, dayOfWeek: targetDayOfWeek }, include: { dutyPersonAssignments: true } })`로 대상 날짜(모레)에 대해 생성할 패턴을, 배정된 듀티 담당자 목록과 함께 조회한다(개정, decisions.md D-39 — 기존에는 `dutyPersonId` 컬럼이 패턴 레코드에 이미 포함되어 있어 별도 `include`가 필요 없었지만, 조인 테이블로 바뀌며 명시적으로 함께 로드해야 한다).
   3. 패턴마다 **개별 `prisma.$transaction`**을 열어(패턴 간 격리, 7장 트랜잭션 원칙과 동일) 다음을 수행한다:
      - `tx.bookingDay.findFirst({ where: { clubDayPatternId: pattern.id, date: targetUtcMidnight } })`로 이미 생성됐는지 확인(decisions.md D-28). 있으면 `{ status: "skipped" }`로 종료.
-     - 없으면 패턴의 필드값을 그대로 복사해 `tx.bookingDay.create(...)` — `isOpen: true` 고정, `clubDayPatternId: pattern.id` 설정. 여기서는 `bookingDayService.createBookingDay`를 재사용하지 않는다(그 함수는 트랜잭션 인자를 받지 않아 이 단계의 원자성 요구와 맞지 않음). 패턴 필드는 이미 등록/수정 시점에 검증됐으므로 생성 시점에 재검증하지 않는다.
+     - 없으면 패턴의 필드값을 그대로 복사해 `tx.bookingDay.create(...)` — `isOpen: true` 고정, `clubDayPatternId: pattern.id` 설정. 여기서는 `bookingDayService.createBookingDay`를 재사용하지 않는다(그 함수는 트랜잭션 인자를 받지 않아 이 단계의 원자성 요구와 맞지 않음). 패턴 필드는 이미 등록/수정 시점에 검증됐으므로 생성 시점에 재검증하지 않는다. **패턴에 배정된 듀티 담당자 계정 전원**(`pattern.dutyPersonAssignments`)에 대해, 생성된 `bookingDay.id`로 `tx.bookingDayDutyPerson.createMany({ data: pattern.dutyPersonAssignments.map(a => ({ bookingDayId: bookingDay.id, dutyPersonId: a.dutyPersonId })) })`를 호출한다(개정, decisions.md D-39 — 기존에는 `dutyPersonId: pattern.dutyPersonId` 한 줄만 `create` 데이터에 포함하면 됐지만, 이제는 배정된 인원 수만큼 조인 테이블 행을 만들어야 한다. 패턴에 배정된 인원이 0명이면 이 호출 자체를 건너뛴다).
      - `pattern.autoAssignMonthlyMembers`가 `true`면 `applyMonthlyMembersToBookingDay(bookingDay.id, tx)`를 같은 트랜잭션에서 호출(기존 함수가 이미 `tx` 인자를 지원하므로 그대로 재사용).
      - `{ status: "created", bookingDayId }`로 종료.
   4. 패턴별 결과 배열(`{ patternId, status: "created" | "skipped" | "failed", bookingDayId?, error? }`)을 반환한다. 한 패턴 처리 중 예외가 발생해도 `try/catch`로 감싸 `status: "failed"`로 기록하고 다음 패턴 처리를 계속한다(한 패턴의 실패가 다른 패턴에 영향을 주지 않음).
@@ -240,6 +296,23 @@ vercel.json                    # crons 설정 (신규, deployment.md 참고)
 3. `prisma.participantCode.findMany()`로 이미 발급된 조합을 조회해 제외한다(재실행해도 안전 — 멱등성).
 4. 남은 조합마다 새 `code`를 생성해 `createMany`로 일괄 등록한다.
 5. 처리 건수(신규 생성/이미 존재/건너뜀)를 콘솔에 요약 출력한다.
+
+### DutyPersonService (`lib/services/dutyPersonService.ts`, 신규, requirements.md 28.2·28.3번, decisions.md D-36·D-37·D-39)
+- `createDutyPerson(input: { name, password })`: `name`이 이미 존재하면(활성/비활성 무관, `@@unique([name])`) `ConflictError`. `hashDutyPassword(password)`(`lib/security/dutyPasswordCrypto.ts`)로 해시해 저장. `isActive` 기본값 `true`.
+- `updateDutyPerson(id, input: { name?, password?, isActive? })`: 전달된 필드만 갱신하는 부분 업데이트(`updateClubDayPattern`/`updateMonthlyMember`와 동일 패턴). `password`가 전달되면 다시 해시해 `passwordHash`를 교체하고, 전달되지 않으면 기존 해시를 그대로 둔다. 비밀번호를 교체할 때는 같은 update 호출에서 `sessionVersion: { increment: 1 }`을 함께 적용해 그 계정으로 이미 발급된 세션을 전부 무효화한다(decisions.md D-38 개정 2026-09-10 — 이름 변경이나 `isActive` 토글만으로는 세션 버전이 오르지 않는다). `isActive` 토글도 이 함수 하나로 처리한다(별도 activate/deactivate 함수 없음).
+- `listDutyPersons(filter?: { activeOnly?: boolean })`: 관리자 화면(`/admin/duty-persons`)은 필터 없이 전체(활성+비활성)를 반환해 배지로 구분 표시한다. `CreateBookingDayForm`/`EditBookingDayForm`/`ClubDayPatternsPanel`의 다중 선택 체크박스 목록은 `activeOnly: true`로 호출해 활성 계정만 선택지로 보여준다. 단, 수정 폼에서는 현재 이미 배정된 계정 중 비활성 계정이 있으면 그 계정도 결과에 포함시켜(선택 상태가 목록에서 사라지지 않도록) 이 함수가 아니라 호출부(폼 컴포넌트/라우트)에서 활성 목록 + 현재 배정된 계정을 합쳐 내려준다.
+- `getAssignableDutyPersons(ids: string[], client?)`(신규, D-39 — 기존 단건 `getAssignableDutyPerson(id)`를 다건으로 확장): 중복 제거한 `ids` 전체를 `client.dutyPerson.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, isActive: true } })`로 한 번에 조회하고, 하나라도 존재하지 않으면 `ValidationError`를 던진다(잘못된 FK로 Prisma P2003 500이 나가지 않도록 서비스에서 먼저 차단). 반환값은 **`name` 기준 오름차순으로 정렬**해 돌려준다(사용자 확인, 2026-09-15 — 클라이언트가 보낸 선택 순서를 그대로 쓰면 체크박스를 클릭한 순서에 따라 `dutyPerson` 텍스트의 표시 순서가 매번 달라지므로, 항상 이름순으로 일관되게 보이도록 서비스가 정렬한다). `BookingDayService`/`ClubDayPatternService`가 저장 직전에 호출해 `dutyPerson` 텍스트를 이 정렬된 순서 그대로 `name`을 `", "`로 이어붙인 값으로 동기화하는 데 사용한다(D-36·D-39 — 클라이언트가 보낸 텍스트를 그대로 믿지 않는다). 비활성 계정도 조회 가능하다(수정 폼에서 이미 배정된 비활성 계정을 그대로 재저장할 수 있어야 하므로). 열린 트랜잭션 안에서 호출할 때는 반드시 그 트랜잭션 클라이언트(`tx`)를 `client`로 넘겨야 한다(트랜잭션 밖 클라이언트를 쓰면 잠금 경합으로 트랜잭션 타임아웃이 발생할 수 있다 — 기존 `getAssignableDutyPerson`과 동일한 주의사항).
+- 하드 삭제 함수는 두지 않는다(decisions.md D-37). N:N으로 바뀌어도 `DutyPerson` 계정 자체를 지우는 함수는 여전히 없다.
+
+### DutyAuthService (`lib/services/dutyAuthService.ts`, 신규, requirements.md 28.4번, decisions.md D-38)
+- `login(name, password)`: `name`으로 `DutyPerson`을 조회해 없거나 `isActive=false`면 `DutyAuthError`. 있으면 `verifyDutyPassword(password, record.passwordHash)`로 검증(불일치 시 `DutyAuthError`). 성공하면 `createDutySessionCookieValue({ dutyPersonId: record.id, sessionVersion: record.sessionVersion })`(`lib/auth/dutySession.ts`)를 호출해 세션 쿠키 값을 반환한다.
+- `verifyDutySessionFromRequest(req)`: 요청의 듀티 세션 쿠키를 서명/만료만 검증해 payload를 반환한다(DB 조회 없음, `middleware.ts`처럼 빠른 1차 검증이 필요한 지점에서 사용). `sessionVersion` 대조는 여기서 하지 않는다(DB가 필요하므로 아래 2차 방어선의 몫).
+- `requireActiveDutyPerson(req)`: 이 서비스의 핵심 함수. 위 서명 검증에 더해 **매 호출마다** `prisma.dutyPerson.findUnique({ where: { id: dutyPersonId } })`로 `isActive`와 `sessionVersion`을 다시 조회한다. 세션이 무효이거나, 계정이 없거나, `isActive=false`거나, 조회한 `sessionVersion`이 payload의 값과 다르면(= 발급 이후 비밀번호가 바뀜, 필드가 없는 옛 세션 포함) `DutyAuthError`를 던진다. `/duty/(protected)/layout.tsx`와 `/api/duty/**` 라우트 핸들러 전체가 서비스 로직 호출 전에 반드시 이 함수를 거친다 — 이 프로젝트에서 세션 검증에 DB 조회가 필수로 포함되는 첫 인증 경로다(관리자 세션은 정반대로 DB 조회가 전혀 없는 무상태 방식, 5장 참고).
+- `logout()`: 관리자와 동일하게 DB 세션 테이블이 없으므로 no-op이며, 실제 쿠키 무효화는 route handler가 담당한다.
+
+### DutyBookingDayService (`lib/services/dutyBookingDayService.ts`, 신규, requirements.md 28.5번, decisions.md D-39)
+- `listBookingDaysForDuty(dutyPersonId)`: `prisma.bookingDay.findMany({ where: { dutyPersonAssignments: { some: { dutyPersonId } } }, orderBy: { date: "asc" } })`(D-39 개정 — 단일 `dutyPersonId` 컬럼 비교가 아니라 조인 테이블 `BookingDayDutyPerson`에 자신의 배정 행이 있는지로 판단). 날짜 범위 필터(기본 "오늘부터 미래")는 `CancelLookup`과 동일하게 클라이언트 사이드에서 처리하도록 전체를 그대로 반환한다(decisions.md D-24와 동일한 패턴 — 데이터 규모가 크지 않아 서버 필터가 필요 없음).
+- `getBookingDayForDuty(bookingDayId, dutyPersonId)`: `prisma.bookingDayDutyPerson.findUnique({ where: { bookingDayId_dutyPersonId: { bookingDayId, dutyPersonId } } })`로 배정 행을 조회한다(복합 PK `@@id([bookingDayId, dutyPersonId])`가 Prisma Client에서 `bookingDayId_dutyPersonId` 복합 유니크 인풋 타입을 생성한다). 배정 행이 없거나 예약일 자체가 없으면 `NotFoundError`(404, decisions.md D-38·D-39)를 던진다 — 같은 예약일에 다른 계정이 배정되어 있어도, 조회한 `dutyPersonId`로 된 행이 없으면 여전히 404다. 통과하면 예약일 기본 정보와 함께 `prisma.booking.findMany({ where: { bookingDayId }, select: { id: true, name: true, status: true } })`로 **이름/상태만** 선택해 참여자 명단을 반환한다(`CANCELLED` 포함 전체 상태, `listBookingsForAdmin`과 달리 `phoneEncrypted`/`paymentConfirmed`/`participantCode` 등은 애초에 select하지 않아 응답에 포함될 수 없다 — 실수로 노출되는 것을 필드 선택 단계에서부터 구조적으로 차단). 같은 예약일에 배정된 다른 듀티 담당자 계정의 이름/존재 여부는 이 응답에 포함하지 않는다(28.5번 — 듀티 계정끼리 서로를 알 수 없음).
 
 ---
 
@@ -322,6 +395,57 @@ model MonthlyMember {
   @@index([year, month, dayOfWeek])
 }
 
+// 듀티 담당자 계정(requirements.md 28번, decisions.md D-36~D-39). 관리자 계정(환경변수 단일 비밀번호)과
+// 완전히 별개의 인증 체계다. 하드 삭제 없음(D-37) — isActive 토글만 제공한다.
+// BookingDay/ClubDayPattern과의 관계는 단일 FK가 아니라 아래 두 조인 테이블(다대다,
+// decisions.md D-39 — 예약일/패턴 하나에 듀티 담당자 여러 명 배정 가능, 인원 상한 없음)로 표현한다.
+// DutyPerson 쪽 FK에 onDelete를 명시하지 않는 이유는 D-36과 동일 — 하드 삭제가 없어 참조 대상이
+// 사라질 일이 없기 때문이다.
+model DutyPerson {
+  id           String   @id @default(cuid())
+  name         String   @unique // 로그인 시 name+password만으로 계정을 특정하므로 유니크(D-36)
+  passwordHash String            // "salt:hash"(hex), crypto.scrypt 기반(D-38)
+  isActive     Boolean  @default(true)
+  // 비밀번호를 바꾸면 1 증가한다. 세션 payload에 담긴 값과 다르면 그 세션은 무효(D-38 개정 2026-09-10)
+  sessionVersion Int    @default(1)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  bookingDayAssignments     BookingDayDutyPerson[]
+  clubDayPatternAssignments ClubDayPatternDutyPerson[]
+}
+
+// 예약일 ↔ 듀티 담당자 계정 조인 테이블(신규, decisions.md D-39 — D-36의 단일 nullable FK
+// BookingDay.dutyPersonId를 완전히 대체). BookingDay가 삭제되면(deleteBookingDay의 하드 삭제)
+// 배정 행도 함께 삭제되도록 onDelete: Cascade를 건다 — DutyPerson 쪽은 하드 삭제가 없어(D-37)
+// cascade가 필요 없다.
+model BookingDayDutyPerson {
+  bookingDayId String
+  bookingDay   BookingDay @relation(fields: [bookingDayId], references: [id], onDelete: Cascade)
+  dutyPersonId String
+  dutyPerson   DutyPerson @relation(fields: [dutyPersonId], references: [id])
+  createdAt    DateTime   @default(now())
+
+  @@id([bookingDayId, dutyPersonId])
+  @@index([dutyPersonId])
+}
+
+// 클럽데이 패턴 ↔ 듀티 담당자 계정 조인 테이블(신규, decisions.md D-39 — D-36의 단일 nullable FK
+// ClubDayPattern.dutyPersonId를 완전히 대체). ClubDayPattern은 물리적 삭제가 없으므로(D-29, 소프트
+// 삭제만) 이 관계에 cascade를 걸 필요가 없다 — 당장 트리거되지 않는 제약을 방어적으로 미리 걸어두는
+// 것은 YAGNI라고 판단해 기본 동작(Restrict)으로 둔다(BookingDayDutyPerson과는 의도적으로 비대칭,
+// 사용자 확인 2026-09-15).
+model ClubDayPatternDutyPerson {
+  clubDayPatternId String
+  clubDayPattern   ClubDayPattern @relation(fields: [clubDayPatternId], references: [id])
+  dutyPersonId     String
+  dutyPerson       DutyPerson     @relation(fields: [dutyPersonId], references: [id])
+  createdAt        DateTime       @default(now())
+
+  @@id([clubDayPatternId, dutyPersonId])
+  @@index([dutyPersonId])
+}
+
 model ClubDayPattern {
   id                       String   @id @default(cuid())
   name                     String?  // 관리자 식별용, 예: "월요일 A체육관 저녁"
@@ -330,7 +454,13 @@ model ClubDayPattern {
   startTime                String   // "HH:mm"
   endTime                  String   // "HH:mm", startTime보다 늦어야 함
   location                 String
-  dutyPerson               String
+  dutyPerson               String   // 자유 텍스트, 표시용. 배정된 계정이 1명 이상이면 그 계정들의 name을
+                                     // 이름순으로 정렬한 뒤 ", "로 이어붙인 값으로 동기화된다(D-36, D-39 개정).
+                                     // 0명이면 관리자가 입력한 텍스트를 그대로 저장한다
+  // 듀티 담당자 계정 연결은 ClubDayPatternDutyPerson 조인 테이블로 표현한다(requirements.md 28.3번,
+  // decisions.md D-39 — 기존 단일 nullable FK dutyPersonId를 완전히 대체). 기존 패턴은 전부
+  // 배정된 계정이 없는 상태로 남는다(소급 반영 없음)
+  dutyPersonAssignments    ClubDayPatternDutyPerson[]
   totalSlots               Int
   annualSlots              Int      @default(0)
   casualSlots              Int      @default(0)
@@ -353,7 +483,14 @@ model BookingDay {
   startTime   String   // "HH:mm", Pacific/Auckland 벽시계 표시값(날짜 계산에 관여하지 않음)
   endTime     String   // "HH:mm", startTime보다 늦어야 함
   location    String
-  dutyPerson  String
+  dutyPerson  String   // 자유 텍스트, 표시용. 배정된 계정이 1명 이상이면 그 계정들의 name을 선택
+                        // 순서대로 ", "로 이어붙인 값으로 동기화된다(D-36, D-39 개정). 0명이면
+                        // 관리자가 입력한 텍스트를 그대로 저장한다
+  // 듀티 담당자 계정 연결은 BookingDayDutyPerson 조인 테이블로 표현한다(requirements.md 28.3번,
+  // decisions.md D-39 — 기존 단일 nullable FK dutyPersonId를 완전히 대체). 클럽데이 자동 생성
+  // (ClubDayGenerationService)은 ClubDayPattern에 배정된 계정 전원을 그대로 복사한다. 기존
+  // 예약일(418건 이상)은 전부 배정된 계정이 없는 상태로 남는다(소급 반영 없음)
+  dutyPersonAssignments BookingDayDutyPerson[]
   totalSlots  Int
   annualSlots Int      @default(0)
   casualSlots Int      @default(0)
@@ -497,6 +634,9 @@ model ParticipantCodeExportLog {
 | PATCH | `/api/admin/participant-codes/[id]` | 내보내기 제외 토글 전용(body: `{ excludedFromExport: boolean }`) → `setParticipantCodeExclusion` (신규, requirements.md 27.5.2번, decisions.md D-34 개정 1) |
 | DELETE | `/api/admin/participant-codes/[id]` | 참여자 코드 완전 삭제(하드 삭제, 되돌릴 수 없음) → `deleteParticipantCode` (신규, requirements.md 27.5.4번) |
 | GET | `/api/admin/participant-codes/export` | 참여자 코드 CSV 다운로드(코드/이름/전화번호, `excludedFromExport=false`만) → `listParticipantCodesForExport` 호출 후 `recordParticipantCodeExport`로 이력 기록 (신규, requirements.md 27.5번, decisions.md D-34) |
+| GET | `/api/admin/duty-persons` | 듀티 담당자 계정 목록(전체, 활성+비활성) → `listDutyPersons()` (신규, requirements.md 28.2번) |
+| POST | `/api/admin/duty-persons` | 듀티 담당자 계정 등록(이름+비밀번호) → `createDutyPerson` (신규) |
+| PATCH | `/api/admin/duty-persons/[id]` | 이름/비밀번호 변경, `isActive` 토글 → `updateDutyPerson` (신규, 하드 삭제 라우트 없음 — decisions.md D-37) |
 | GET | `/api/admin/dashboard` | 대시보드 요약 데이터 |
 
 예약자 목록/연 멤버 목록을 반환하는 GET 라우트는 DB의 `phoneEncrypted`를 서버(route handler)에서 복호화해 평문 전화번호로 응답에 담는다. 클라이언트로는 항상 복호화된 평문이 내려가며, `phoneHash`/`phoneEncrypted` 원값은 API 응답에 노출하지 않는다.
@@ -514,18 +654,35 @@ model ParticipantCodeExportLog {
 - `PATCH /api/admin/participant-codes/[id]`는 이 프로젝트의 다른 PATCH 라우트(예: `PATCH /api/admin/club-day-patterns/[id]`가 `isActive` 토글을 처리하는 것)와 동일하게, 단일 필드(`excludedFromExport`)만 받아 갱신한다. 다른 필드(`code`, `name` 등)는 이 라우트로 수정할 수 없다 — `ParticipantCode`는 예약 생성 시에만 시스템이 채우는 파생 데이터이므로(decisions.md D-34) 관리자가 임의로 값을 바꿀 수 있는 일반 수정 API를 두지 않는다.
 - `DELETE /api/admin/participant-codes/[id]`(신규, requirements.md 27.5.4번)는 같은 `[id]` 라우트 파일에 `PATCH`와 함께 정의된다(같은 리소스에 대한 두 메서드). `deleteParticipantCode`가 대상이 없으면 `NotFoundError`를 던지고, 있으면 즉시 하드 삭제한다 — 소프트 삭제(`deletedAt`)가 아니다. 지인 대리 예약(본인 번호로 지인 이름 등록)으로 잘못 만들어진 신원을 정리하는 용도이며, 삭제된 신원이 다시 예약하면 `ensureParticipantCode`가 새 코드를 발급할 뿐 이전 코드는 복구되지 않는다. 여러 행을 하나로 합치는 "병합"은 다루지 않는다(YAGNI, requirements.md 27.5.4번).
 
+**듀티 담당자 다중 배정 관련 비고 (requirements.md 28.3번, decisions.md D-39)**
+- `POST /api/admin/booking-days`, `PATCH /api/admin/booking-days/[id]`, `POST /api/admin/club-day-patterns`, `PATCH /api/admin/club-day-patterns/[id]` 네 라우트의 요청 body는 기존 `dutyPersonId: string | null`(단일) 필드 대신 `dutyPersonIds: string[]`(배열)를 받는다. 존재하지 않는 id가 하나라도 섞여 있으면 `ValidationError`(400)로 전체 요청을 거부한다(부분 성공 없음).
+- `PATCH` 두 라우트는 부분 업데이트 컨벤션을 그대로 따른다 — body에 `dutyPersonIds` 키 자체가 없으면 기존 배정을 건드리지 않고, 빈 배열 `[]`을 명시적으로 보내면 배정을 전부 해제한다(기존에 `dutyPersonId: null`을 보내던 것과 동일한 의미).
+- 응답 DTO(`GET`/`POST`/`PATCH`가 반환하는 예약일·패턴 객체)는 `dutyPersonId` 필드 대신, 배정된 계정 배열을 `dutyPersonIds: string[]`(id만) 또는 `dutyPersons: { id, name, isActive }[]`(수정 폼 초기값 렌더링용) 형태로 내려준다. 정확한 필드명/형태는 프런트엔드 폼이 필요로 하는 모양에 맞춰 구현 시점에 정하되, 반드시 "여러 명"을 표현할 수 있는 배열이어야 한다(단일 값으로 되돌리지 않는다).
+
 ### 크론용 (`/api/admin/*` 미들웨어 보호 대상이 아님, 라우트 자체에서 `CRON_SECRET` 검증)
 
 | Method | Path | 설명 |
 |---|---|---|
 | GET | `/api/cron/club-days` | Vercel Cron이 매일 1회(뉴질랜드 기준 오후 10:30, 22:30경) 호출. `assertCronSecret`으로 `Authorization: Bearer {CRON_SECRET}` 헤더 검증 후 `generateUpcomingClubDays()` 실행(decisions.md D-27 개정) |
 
+### 듀티 담당자용 (`middleware.ts`가 서명/만료만 1차 검증, `/api/duty/login` 제외 — requirements.md 28번)
+
+| Method | Path | 설명 |
+|---|---|---|
+| POST | `/api/duty/login` | name+password 검증 → 성공 시 듀티 세션 쿠키 발급 (신규, `DutyAuthService.login`) |
+| POST | `/api/duty/logout` | 듀티 세션 쿠키 무효화 (신규) |
+| GET | `/api/duty/booking-days` | 로그인한 계정이 조인 테이블로 배정된 예약일 목록(decisions.md D-39) → `requireActiveDutyPerson` 통과 후 `listBookingDaysForDuty` (신규) |
+| GET | `/api/duty/booking-days/[id]` | 상세(기본정보 + 참여자 이름/상태만) → `requireActiveDutyPerson` 통과 후 `getBookingDayForDuty`. 배정되지 않은 id는 `NotFoundError`(404, decisions.md D-38·D-39) (신규) |
+
+전화번호/결제확인/참여자 코드는 이 두 GET 라우트의 응답 DTO에 애초에 포함되지 않는다(`dutyBookingDayService.ts`가 해당 필드를 select하지 않음, architecture.md 2장 참고).
+
 ---
 
 ## 5. 관리자 인증 방식 상세
 
 - 로그인(`POST /api/admin/login`): 요청 body의 password를 환경변수 `ADMIN_PASSWORD`와 비교한다. 타이밍 공격 방지를 위해 단순 `===` 대신 길이를 맞춘 뒤 `crypto.timingSafeEqual`로 비교한다. (해시 저장 방식을 검토했으나, 관리자 1인 체제 + MVP 규모에서는 설정 편의를 우선해 평문 환경변수 유지로 최종 결정. decisions.md D-11/D-13 참고)
-- 세션 payload: `{ role: "admin", iat, exp }` (exp = iat + 24h, 요구사항 21번 만료 예시 반영).
+- 세션 payload: `{ role: "admin", pwFingerprint, iat, exp }` (exp = iat + 24h, 요구사항 21번 만료 예시 반영).
+- `pwFingerprint`는 로그인 시점 `ADMIN_PASSWORD`의 SHA-256 해시(hex)다(decisions.md D-38 개정 2026-09-10). `verifyAdminSessionCookieValue`가 서명/만료 검증을 통과한 뒤 **현재** 환경변수로 다시 계산한 지문과 대조해, 값이 다르거나(= 비밀번호가 바뀜) 필드 자체가 없으면(이 기능 배포 전 발급된 옛 세션) 세션을 무효 처리한다. 해시는 Node의 `crypto`가 아니라 Web Crypto `crypto.subtle.digest`로 계산해 Edge Runtime(`middleware.ts`)에서도 동일하게 동작하며, DB 조회가 없으므로 관리자 세션의 무상태 구조는 그대로 유지된다.
 - 서명: `ADMIN_SESSION_SECRET`(별도 환경변수, `ADMIN_PASSWORD`와 분리)를 키로 HMAC-SHA256 서명. 쿠키 값 형식은 `base64url(payload) + "." + base64url(signature)`.
 - 쿠키 속성: `httpOnly: true`, `secure: true`(프로덕션), `sameSite: "lax"`, `path: "/"`, `maxAge: 60*60*24`.
 - DB 세션 테이블은 두지 않는다(요구사항 확정사항). 로그아웃은 쿠키를 즉시 만료시키는 방식으로 처리(서버 측 블랙리스트 없음 — MVP 범위에서는 24시간 자연 만료로 충분하다고 판단).
@@ -539,6 +696,16 @@ model ParticipantCodeExportLog {
 - Vercel은 크론이 등록된 경로를 호출할 때, 프로젝트에 설정된 `CRON_SECRET` 환경변수 값을 `Authorization: Bearer {CRON_SECRET}` 헤더로 자동으로 실어 보낸다(Vercel 공식 동작).
 - `lib/auth/cronAuth.ts`의 `assertCronSecret(req: NextRequest)`가 요청의 `authorization` 헤더를 `` `Bearer ${process.env.CRON_SECRET}` ``와 비교한다. `CRON_SECRET` 환경변수가 설정되어 있지 않으면 즉시 에러(설정 누락을 조용히 통과시키지 않음), 헤더가 없거나 값이 다르면 `AdminAuthError`(401)를 던진다. 새 에러 클래스를 추가하지 않고 기존 `AdminAuthError`를 재사용한다(이 프로젝트의 "필요한 만큼만 에러 클래스를 둔다" 원칙, 8장 참고).
 - 이 라우트는 관리자 화면에서 호출되지 않으므로(오직 Vercel Cron만 호출), `verifySessionFromRequest`(관리자 세션 쿠키 검증)는 사용하지 않는다.
+
+### 5-2. 듀티 세션 인증 방식 상세 (`/duty/**`, `/api/duty/**`, requirements.md 28.4번, decisions.md D-38)
+
+- 로그인(`POST /api/duty/login`): 요청 body의 `name`/`password`로 `DutyPerson`을 조회한다. 계정이 없거나 `isActive=false`면 `DutyAuthError`(401). 있으면 `verifyDutyPassword(password, record.passwordHash)`로 검증한다(불일치 시 `DutyAuthError`).
+- 세션 payload: `{ role: "duty", dutyPersonId, sessionVersion, iat, exp }`(exp = iat + 24h, 관리자 세션과 동일한 만료). `sessionVersion`은 로그인 시점의 `DutyPerson.sessionVersion` 값이다(decisions.md D-38 개정 2026-09-10).
+- 서명: `DUTY_SESSION_SECRET`(별도 환경변수, `ADMIN_SESSION_SECRET`과 분리)를 키로 HMAC-SHA256 서명. 쿠키 값 형식/인코딩은 관리자 세션(`lib/auth/session.ts`)과 동일하게 `base64url(payload) + "." + base64url(signature)`.
+- 쿠키 이름은 관리자와 겹치지 않는 별도 이름(예: `duty_session`)을 쓰며, 속성은 관리자 세션과 동일(`httpOnly: true`, `secure: true`(프로덕션), `sameSite: "lax"`, `path: "/"`).
+- **`middleware.ts`(Edge Runtime)의 역할은 서명/만료 검증까지만이다.** `lib/db/prisma.ts`가 로컬 개발 시 `node:path`를 사용하는 등 Node 런타임을 전제로 하고 있어, 미들웨어(Edge Runtime)에서 직접 `DutyPerson.isActive`를 조회할 수 없다. 서명이 유효하지 않거나 만료됐으면 페이지 요청은 `/duty/login`으로 리다이렉트, API 요청은 401 JSON을 반환한다(관리자 미들웨어와 동일한 실패 처리 패턴).
+- **`isActive`/`sessionVersion` 재검증은 Node 런타임 계층(2차·최종 방어선)에서만 이루어진다.** `/duty/(protected)/layout.tsx`(Server Component)와 `/api/duty/booking-days`, `/api/duty/booking-days/[id]` 두 라우트 핸들러는 실제 서비스 로직 호출 전에 반드시 `DutyAuthService.requireActiveDutyPerson(req)`를 호출해 매 요청마다 DB에서 두 값을 다시 확인한다. 계정이 방금 비활성화됐거나 관리자가 방금 비밀번호를 바꿨다면(→ `sessionVersion` 불일치), 이미 서명이 유효한 세션을 갖고 있어도 이 단계에서 즉시 `DutyAuthError`(401)로 차단된다. 추가 쿼리 없이 기존 재조회 결과에서 필드 하나를 더 대조하는 것이라 비용이 늘지 않는다.
+- 이 이중 구조(미들웨어=무상태 서명 검증, 서비스 계층=상태 기반 DB 재검증)는 관리자 세션이 이미 채택한 "미들웨어 1차 방어 + 라우트 핸들러 방어적 재검증" 패턴(5장 서두)의 연장이지만, 관리자 세션과 달리 재검증 단계에 DB 조회가 실질적으로 필요하다는 점이 다르다(관리자는 재검증도 서명 확인뿐이다).
 
 ---
 
@@ -560,6 +727,14 @@ model ParticipantCodeExportLog {
 - `createAnnualMember`, `createBooking` 등 쓰기 경로는 입력 phone을 정규화 → `hashPhone` + `encryptPhone` 계산 → 두 값만 저장한다. 평문 phone/normalizedPhone은 어떤 컬럼에도 남기지 않는다.
 - 관리자용 GET 라우트(예약자 목록, 연 멤버 목록)에서만 `decryptPhone`을 호출해 응답에 평문을 담는다.
 
+### 6-1. 듀티 담당자 비밀번호 해시 (`lib/security/dutyPasswordCrypto.ts`, 신규, requirements.md 28.4번, decisions.md D-38)
+
+- 전화번호(`phoneHash`/`phoneEncrypted`)와 달리, 듀티 담당자 비밀번호는 "일치 여부"만 검증하면 되고 복호화(평문 복원)가 애초에 필요 없다. 따라서 대칭키 암호화가 아니라 **salted hash**(단방향)를 쓴다 — 관리자 비밀번호(D-11에서 검토했다가 D-13에서 폐기)와 같은 알고리즘 계열이지만, 계정마다 서로 다른 비밀번호가 DB에 여러 건 저장된다는 점에서 "환경변수 하나면 충분한" 관리자 케이스와는 근본적으로 다른 문제다.
+- `hashDutyPassword(password: string): string` — 계정마다 무작위 salt(예: 16바이트)를 생성해 `crypto.scryptSync(password, salt, 64)`로 파생하고, `` `${saltHex}:${hashHex}` `` 형식의 문자열로 반환한다. `DutyPerson.passwordHash`에 저장한다.
+- `verifyDutyPassword(password: string, stored: string): boolean` — `stored`를 `:`로 분리해 salt를 복원하고, 같은 방식으로 재계산한 해시를 `crypto.timingSafeEqual`로 비교한다(타이밍 공격 방지, `adminAuthService.ts`의 `timingSafeStringEqual`과 같은 원칙).
+- 새 npm 의존성을 추가하지 않는다 — Node 내장 `crypto` 모듈만 사용한다(`phoneCrypto.ts`와 동일한 최소 의존성 원칙).
+- 알고리즘 선택(`scrypt`, decisions.md D-38)은 사용자 확인을 거쳐 확정했다. 추후 `bcrypt`/`argon2` 등 외부 라이브러리로 대체하고 싶어지면 이 파일의 두 함수 시그니처만 유지하면 호출부(`dutyAuthService.ts`, `dutyPersonService.ts`) 변경 없이 교체 가능하다.
+
 ---
 
 ## 7. 트랜잭션 처리 원칙
@@ -571,10 +746,12 @@ model ParticipantCodeExportLog {
 | 예약 생성 | `BookingService.createBooking` | 기존 예약 조회(중복/재예약 판정) + memberType 판정에 필요한 연멤버 조회 + slot 카운트 조회 + insert + `ParticipantCodeService.ensureParticipantCode` 호출까지 한 트랜잭션으로 묶어 동시 요청 시 슬롯 초과를 방지하고, 예약과 참여자 코드 발급이 분리되어 한쪽만 성공하는 상태를 막는다(requirements.md 27번, decisions.md D-33) |
 | 예약 취소 | `BookingService.cancelBooking` | 상태 조회/검증 + status 업데이트 + (CONFIRMED였다면) `promoteWaitingBookings` 호출까지 하나의 트랜잭션 |
 | 관리자 승인 | `BookingService.adminChangeBookingStatus` | 슬롯 여유 재확인 + status 업데이트 |
-| 슬롯 변경 | `BookingDayService.updateBookingDay` | BookingDay 업데이트 + (증가 시) `promoteWaitingBookings` 호출까지 하나의 트랜잭션. 감소 시에는 업데이트만 수행(강제 하향 없음) |
+| 예약일 생성(개정) | `BookingDayService.createBookingDay` | `BookingDay` insert + `dutyPersonIds` 검증(`getAssignableDutyPersons`) + `BookingDayDutyPerson.createMany`까지 하나의 트랜잭션(신규, decisions.md D-39 — 단일 FK였을 때는 `BookingDay` insert 한 번으로 끝나 트랜잭션이 필요 없었지만, 조인 테이블에 대한 두 번째 쓰기가 생기며 새로 필요해짐). 이후 `applyMonthlyMembersToBookingDay` 호출은 별도 호출로 유지(기존과 동일) |
+| 슬롯 변경 | `BookingDayService.updateBookingDay` | BookingDay 업데이트 + (증가 시) `promoteWaitingBookings` 호출 + (`dutyPersonIds` 전달 시) 기존 `BookingDayDutyPerson` 전체 삭제 후 재생성까지 하나의 트랜잭션(개정, decisions.md D-39). 감소 시에는 업데이트만 수행(강제 하향 없음) |
+| 클럽데이 패턴 등록/수정(신규) | `ClubDayPatternService.createClubDayPattern`/`updateClubDayPattern` | `ClubDayPattern` insert 또는 update + `dutyPersonIds` 검증 + `ClubDayPatternDutyPerson` 전체 재생성(수정 시 삭제 후 재생성)까지 하나의 트랜잭션(신규, decisions.md D-39 — 기존에는 두 함수 모두 트랜잭션을 쓰지 않았으나, 조인 테이블 쓰기가 추가되며 새로 필요해짐) |
 | 월 멤버 자동 배정 | `MonthlyMemberService.applyMonthlyMembersToBookingDay` | 대상 월 멤버 조회 + 중복 예약 확인 + 예약 insert(들) + `ParticipantCodeService.ensureParticipantCodesBatch` 호출까지 BookingDay 단위로 하나의 트랜잭션 |
 | 대기자 자동 승격 | `BookingService.promoteWaitingBookings` | 남은 슬롯 계산 + 대상 대기자 목록(FIFO 정렬) 조회 + 순차 status 업데이트. 단독 호출 시에도 자체 트랜잭션으로 감싸고, 위 취소/슬롯변경 흐름에서 호출될 때는 상위 트랜잭션에 참여(같은 `tx` 인스턴스 전달) |
-| 클럽데이 생성(신규) | `ClubDayGenerationService.generateUpcomingClubDays` | 패턴별로 개별 트랜잭션 — 중복 생성 확인(`clubDayPatternId`+`date`) + `BookingDay` insert + (조건부) `applyMonthlyMembersToBookingDay`까지 패턴 단위로 하나의 트랜잭션. 한 패턴의 실패가 다른 패턴 처리에 영향을 주지 않는다 |
+| 클럽데이 생성(신규) | `ClubDayGenerationService.generateUpcomingClubDays` | 패턴별로 개별 트랜잭션 — 중복 생성 확인(`clubDayPatternId`+`date`) + `BookingDay` insert + 패턴에 배정된 듀티 담당자 전원을 `BookingDayDutyPerson`으로 복사(개정, decisions.md D-39) + (조건부) `applyMonthlyMembersToBookingDay`까지 패턴 단위로 하나의 트랜잭션. 한 패턴의 실패가 다른 패턴 처리에 영향을 주지 않는다 |
 
 공통 원칙
 - 모든 서비스 함수는 Prisma 트랜잭션 클라이언트(`tx`)를 인자로 받을 수 있도록 설계해, 상위 트랜잭션에 참여(nested call)할 수 있게 한다.
@@ -588,8 +765,9 @@ MVP 수준의 단순한 컨벤션.
 
 - 공통 에러 클래스(`lib/errors.ts`): `AppError(code: string, message: string, httpStatus: number)`를 베이스로 하고, 필요한 하위 클래스만 최소한으로 둔다.
   - `ValidationError` (400) — 입력값 오류(예: 슬롯 합 불일치)
-  - `AdminAuthError` (401) — 로그인 실패/세션 무효
-  - `NotFoundError` (404) — 예약일/예약/멤버 없음
+  - `AdminAuthError` (401) — 관리자 로그인 실패/세션 무효
+  - `DutyAuthError` (401, 신규) — 듀티 로그인 실패/세션 무효/`isActive=false`(requirements.md 28.4번, decisions.md D-38). `AdminAuthError`를 재사용하지 않고 별도 클래스를 두는 이유는, 두 세션 체계가 완전히 분리되어 있어(28.4번) 클라이언트가 `error.code`로 어느 세션이 문제인지 구분할 수 있어야 하기 때문이다
+  - `NotFoundError` (404) — 예약일/예약/멤버 없음. 자신에게 배정되지 않은 예약일에 듀티 담당자가 접근한 경우도 이 에러로 처리한다(decisions.md D-38, 403 대신 404를 택해 리소스 존재 자체를 감춤)
   - `ConflictError` (409) — 중복 예약, 슬롯 초과로 승인 불가, 전화번호 불일치로 취소 거부
 - 응답 형식
   - 성공: `{ "data": ... }`

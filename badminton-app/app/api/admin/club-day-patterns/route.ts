@@ -39,6 +39,9 @@ export const POST = withApiHandler(async (req: NextRequest) => {
     endTime: body.endTime,
     location: body.location,
     dutyPerson: body.dutyPerson,
+    // 다중 배정(decisions.md D-39). 존재하지 않는 id가 하나라도 섞이면 서비스 계층이
+    // ValidationError(400)로 요청 전체를 거부한다(부분 성공 없음).
+    dutyPersonIds: Array.isArray(body.dutyPersonIds) ? body.dutyPersonIds : [],
     totalSlots: body.totalSlots,
     annualSlots: body.annualSlots,
     casualSlots: body.casualSlots,

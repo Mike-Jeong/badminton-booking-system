@@ -1,14 +1,19 @@
 /**
  * 관리자 세션 쿠키 서명/검증 (architecture.md 5장)
- * - payload: { role: "admin", iat, exp } (exp = iat + 24h)
+ * - payload: { role: "admin", pwFingerprint, iat, exp } (exp = iat + 24h)
  * - 서명: ADMIN_SESSION_SECRET을 키로 HMAC-SHA256
  * - 쿠키 값 형식: base64url(payload JSON) + "." + base64url(signature)
  * - Web Crypto API(crypto.subtle)만 사용해 Edge Runtime(middleware.ts)과
  *   Node 런타임(route handler) 양쪽에서 동일 코드로 동작한다.
+ * - 관리자 비밀번호(ADMIN_PASSWORD 환경변수)가 바뀌면 이미 발급된 세션도 즉시 무효화된다
+ *   (decisions.md D-38 개정 2026-09-10). DB 조회 없이 지문 비교만으로 판정하므로
+ *   기존 무상태(stateless) 구조와 Edge Runtime 호환성이 그대로 유지된다.
  */
 
 export interface AdminSessionPayload {
   role: "admin";
+  /** 로그인 시점 ADMIN_PASSWORD의 SHA-256 지문(hex). 검증 시 현재 값과 대조한다. */
+  pwFingerprint: string;
   iat: number;
   exp: number;
 }
@@ -58,11 +63,33 @@ async function getHmacKey(): Promise<CryptoKey> {
   );
 }
 
+/**
+ * 현재 ADMIN_PASSWORD 환경변수의 SHA-256 지문(hex)을 계산한다.
+ * 비밀번호 자체가 아니라 지문만 세션에 담기며, 이 값은 "지금 세션이 발급될 당시의 비밀번호와
+ * 같은 비밀번호가 여전히 쓰이고 있는가"를 판정하는 용도로만 쓴다(decisions.md D-38 개정).
+ * Node의 node:crypto가 아니라 Web Crypto(crypto.subtle)를 쓰는 이유는 이 파일이 Edge Runtime의
+ * middleware.ts에서도 그대로 실행되기 때문이다.
+ */
+async function computeAdminPasswordFingerprint(): Promise<string> {
+  const password = process.env.ADMIN_PASSWORD;
+  if (!password) {
+    throw new Error("ADMIN_PASSWORD 환경변수가 설정되지 않았습니다.");
+  }
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(password)
+  );
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 /** 로그인 성공 시 새 세션 쿠키 값을 생성한다. */
 export async function createAdminSessionCookieValue(): Promise<string> {
   const iat = Math.floor(Date.now() / 1000);
   const payload: AdminSessionPayload = {
     role: "admin",
+    pwFingerprint: await computeAdminPasswordFingerprint(),
     iat,
     exp: iat + ADMIN_SESSION_MAX_AGE_SECONDS,
   };
@@ -123,6 +150,17 @@ export async function verifyAdminSessionCookieValue(
   if (payload.role !== "admin") return null;
   if (typeof payload.exp !== "number") return null;
   if (payload.exp < Math.floor(Date.now() / 1000)) return null;
+
+  // 비밀번호 지문 대조(decisions.md D-38 개정 2026-09-10).
+  // 지문 필드가 없는 옛 세션(이 기능 배포 전 발급)도 여기서 함께 무효 처리된다.
+  if (typeof payload.pwFingerprint !== "string" || !payload.pwFingerprint) return null;
+  let currentFingerprint: string;
+  try {
+    currentFingerprint = await computeAdminPasswordFingerprint();
+  } catch {
+    return null;
+  }
+  if (payload.pwFingerprint !== currentFingerprint) return null;
 
   return payload;
 }

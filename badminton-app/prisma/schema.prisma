@@ -71,6 +71,57 @@ model MonthlyMember {
   @@index([year, month, dayOfWeek])
 }
 
+// 듀티 담당자 계정(requirements.md 28번, decisions.md D-36~D-39). 관리자 계정(환경변수 단일 비밀번호)과
+// 완전히 별개의 인증 체계다. 하드 삭제 없음(D-37) — isActive 토글만 제공한다.
+// BookingDay/ClubDayPattern과의 관계는 단일 FK가 아니라 아래 두 조인 테이블(다대다,
+// decisions.md D-39 — 예약일/패턴 하나에 듀티 담당자 여러 명 배정 가능, 인원 상한 없음)로 표현한다.
+// DutyPerson 쪽 FK에 onDelete를 명시하지 않는 이유는 D-36과 동일 — 하드 삭제가 없어 참조 대상이
+// 사라질 일이 없기 때문이다.
+model DutyPerson {
+  id           String   @id @default(cuid())
+  name         String   @unique // 로그인 시 name+password만으로 계정을 특정하므로 유니크(D-36)
+  passwordHash String            // "salt:hash"(hex), crypto.scrypt 기반(D-38)
+  isActive     Boolean  @default(true)
+  // 비밀번호를 바꾸면 1 증가한다. 세션 payload에 담긴 값과 다르면 그 세션은 무효(D-38 개정 2026-09-10)
+  sessionVersion Int    @default(1)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  bookingDayAssignments     BookingDayDutyPerson[]
+  clubDayPatternAssignments ClubDayPatternDutyPerson[]
+}
+
+// 예약일 ↔ 듀티 담당자 계정 조인 테이블(신규, decisions.md D-39 — D-36의 단일 nullable FK
+// BookingDay.dutyPersonId를 완전히 대체). BookingDay가 삭제되면(deleteBookingDay의 하드 삭제)
+// 배정 행도 함께 삭제되도록 onDelete: Cascade를 건다 — DutyPerson 쪽은 하드 삭제가 없어(D-37)
+// cascade가 필요 없다.
+model BookingDayDutyPerson {
+  bookingDayId String
+  bookingDay   BookingDay @relation(fields: [bookingDayId], references: [id], onDelete: Cascade)
+  dutyPersonId String
+  dutyPerson   DutyPerson @relation(fields: [dutyPersonId], references: [id])
+  createdAt    DateTime   @default(now())
+
+  @@id([bookingDayId, dutyPersonId])
+  @@index([dutyPersonId])
+}
+
+// 클럽데이 패턴 ↔ 듀티 담당자 계정 조인 테이블(신규, decisions.md D-39 — D-36의 단일 nullable FK
+// ClubDayPattern.dutyPersonId를 완전히 대체). ClubDayPattern은 물리적 삭제가 없으므로(D-29, 소프트
+// 삭제만) 이 관계에 cascade를 걸 필요가 없다 — 당장 트리거되지 않는 제약을 방어적으로 미리 걸어두는
+// 것은 YAGNI라고 판단해 기본 동작(Restrict)으로 둔다(BookingDayDutyPerson과는 의도적으로 비대칭,
+// 사용자 확인 2026-09-15).
+model ClubDayPatternDutyPerson {
+  clubDayPatternId String
+  clubDayPattern   ClubDayPattern @relation(fields: [clubDayPatternId], references: [id])
+  dutyPersonId     String
+  dutyPerson       DutyPerson     @relation(fields: [dutyPersonId], references: [id])
+  createdAt        DateTime       @default(now())
+
+  @@id([clubDayPatternId, dutyPersonId])
+  @@index([dutyPersonId])
+}
+
 model ClubDayPattern {
   id                       String    @id @default(cuid())
   name                     String?   // 관리자 식별용, 예: "월요일 A체육관 저녁"
@@ -79,7 +130,13 @@ model ClubDayPattern {
   startTime                String    // "HH:mm"
   endTime                  String    // "HH:mm", startTime보다 늦어야 함
   location                 String
-  dutyPerson               String
+  dutyPerson               String    // 자유 텍스트, 표시용. 배정된 계정이 1명 이상이면 그 계정들의 name을
+                                      // 이름순으로 정렬한 뒤 ", "로 이어붙인 값으로 동기화된다(D-36, D-39 개정).
+                                      // 0명이면 관리자가 입력한 텍스트를 그대로 저장한다
+  // 듀티 담당자 계정 연결은 ClubDayPatternDutyPerson 조인 테이블로 표현한다(requirements.md 28.3번,
+  // decisions.md D-39 — 기존 단일 nullable FK dutyPersonId를 완전히 대체). 기존 패턴은 전부
+  // 배정된 계정이 없는 상태로 남는다(소급 반영 없음)
+  dutyPersonAssignments    ClubDayPatternDutyPerson[]
   totalSlots               Int
   annualSlots              Int       @default(0)
   casualSlots              Int       @default(0)
@@ -102,7 +159,14 @@ model BookingDay {
   startTime   String   // "HH:mm", Pacific/Auckland 벽시계 표시값(날짜 계산에 관여하지 않음)
   endTime     String   // "HH:mm", startTime보다 늦어야 함
   location    String
-  dutyPerson  String
+  dutyPerson  String   // 자유 텍스트, 표시용. 배정된 계정이 1명 이상이면 그 계정들의 name을 이름순으로
+                        // 정렬한 뒤 ", "로 이어붙인 값으로 동기화된다(D-36, D-39 개정). 0명이면
+                        // 관리자가 입력한 텍스트를 그대로 저장한다
+  // 듀티 담당자 계정 연결은 BookingDayDutyPerson 조인 테이블로 표현한다(requirements.md 28.3번,
+  // decisions.md D-39 — 기존 단일 nullable FK dutyPersonId를 완전히 대체). 클럽데이 자동 생성
+  // (ClubDayGenerationService)은 ClubDayPattern에 배정된 계정 전원을 그대로 복사한다. 기존
+  // 예약일(418건 이상)은 전부 배정된 계정이 없는 상태로 남는다(소급 반영 없음)
+  dutyPersonAssignments BookingDayDutyPerson[]
   totalSlots  Int
   annualSlots Int      @default(0)
   casualSlots Int      @default(0)

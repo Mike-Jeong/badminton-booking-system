@@ -16,10 +16,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { DutyPersonMultiSelect, type DutyPersonOption } from "@/components/admin/DutyPersonMultiSelect";
 
 const DAY_LABELS = ["일", "월", "화", "수", "목", "금", "토"];
 
 type SlotMode = "SEPARATED" | "COMBINED";
+
+export type { DutyPersonOption };
 
 export interface ClubDayPatternRow {
   id: string;
@@ -30,6 +33,8 @@ export interface ClubDayPatternRow {
   endTime: string;
   location: string;
   dutyPerson: string;
+  /** 현재 배정된 듀티 담당자 계정 id 목록(다중, decisions.md D-39). 체크박스 초기 선택 상태. */
+  dutyPersonIds: string[];
   totalSlots: number;
   annualSlots: number;
   casualSlots: number;
@@ -45,7 +50,7 @@ interface PatternFormState {
   startTime: string;
   endTime: string;
   location: string;
-  dutyPerson: string;
+  dutyPersonIds: string[];
   totalSlots: string;
   annualSlots: string;
   casualSlots: string;
@@ -61,7 +66,7 @@ const initialCreateForm: PatternFormState = {
   startTime: "",
   endTime: "",
   location: "",
-  dutyPerson: "",
+  dutyPersonIds: [],
   totalSlots: "",
   annualSlots: "",
   casualSlots: "",
@@ -78,7 +83,7 @@ function toFormState(pattern: ClubDayPatternRow): PatternFormState {
     startTime: pattern.startTime,
     endTime: pattern.endTime,
     location: pattern.location,
-    dutyPerson: pattern.dutyPerson,
+    dutyPersonIds: pattern.dutyPersonIds,
     totalSlots: String(pattern.totalSlots),
     annualSlots: String(pattern.annualSlots),
     casualSlots: String(pattern.casualSlots),
@@ -88,11 +93,22 @@ function toFormState(pattern: ClubDayPatternRow): PatternFormState {
   };
 }
 
-function buildPayload(form: PatternFormState) {
+/**
+ * 듀티 담당자는 체크박스 다중 선택으로 고르고, 서버에는 선택한 계정 id 목록(dutyPersonIds)을
+ * 통째로 보낸다(requirements.md 28.3번, decisions.md D-39). 표시용 dutyPerson 텍스트는 1명 이상
+ * 선택 시 서버가 이름순으로 정렬해 덮어쓰므로 여기서 보내는 값은 fallback일 뿐이다.
+ * 아무도 고르지 않은 경우(기존 패턴의 미배정 상태 유지) 기존 텍스트를 그대로 보낸다.
+ */
+function buildPayload(
+  form: PatternFormState,
+  dutyPersons: DutyPersonOption[],
+  fallbackDutyPersonText: string
+) {
   const isSeparated = form.slotMode === "SEPARATED";
   const annualSlots = isSeparated ? Number(form.annualSlots || 0) : 0;
   const casualSlots = isSeparated ? Number(form.casualSlots || 0) : 0;
   const totalSlots = isSeparated ? annualSlots + casualSlots : Number(form.totalSlots || 0);
+  const selectedDutyPersons = dutyPersons.filter((p) => form.dutyPersonIds.includes(p.id));
   return {
     name: form.name || null,
     dayOfWeek: Number(form.dayOfWeek),
@@ -100,7 +116,11 @@ function buildPayload(form: PatternFormState) {
     startTime: form.startTime,
     endTime: form.endTime,
     location: form.location,
-    dutyPerson: form.dutyPerson,
+    dutyPerson:
+      selectedDutyPersons.length > 0
+        ? selectedDutyPersons.map((p) => p.name).join(", ")
+        : fallbackDutyPersonText,
+    dutyPersonIds: form.dutyPersonIds,
     totalSlots,
     slotMode: form.slotMode,
     annualSlots: isSeparated ? annualSlots : undefined,
@@ -114,10 +134,15 @@ function PatternFormFields({
   idPrefix,
   form,
   update,
+  dutyPersons,
+  currentDutyPersonText,
 }: {
   idPrefix: string;
   form: PatternFormState;
   update: <K extends keyof PatternFormState>(key: K, value: PatternFormState[K]) => void;
+  dutyPersons: DutyPersonOption[];
+  /** 수정 폼에서만 전달(undefined면 등록 폼). 수정 대상 패턴의 현재 듀티 담당자 텍스트. */
+  currentDutyPersonText?: string;
 }) {
   const isSeparated = form.slotMode === "SEPARATED";
   const computedTotalSlots = Number(form.annualSlots || 0) + Number(form.casualSlots || 0);
@@ -191,15 +216,22 @@ function PatternFormFields({
         />
       </div>
 
-      <div className="space-y-2">
-        <Label htmlFor={`${idPrefix}-dutyPerson`}>듀티 담당자</Label>
-        <Input
-          id={`${idPrefix}-dutyPerson`}
-          value={form.dutyPerson}
-          onChange={(e) => update("dutyPerson", e.target.value)}
-          required
-        />
-      </div>
+      {/* 기존 패턴은 배정된 계정이 없고 텍스트만 있을 수 있다(소급 반영 없음, D-36·D-39).
+          수정 폼에서 아무것도 체크하지 않으면 배정 없이 현재 텍스트가 그대로 유지된다.
+          (EditBookingDayForm과 동일한 문구/로직) */}
+      <DutyPersonMultiSelect
+        idPrefix={idPrefix}
+        options={dutyPersons}
+        selectedIds={form.dutyPersonIds}
+        onChange={(next) => update("dutyPersonIds", next)}
+        emptySelectionHint={
+          currentDutyPersonText === undefined
+            ? undefined
+            : `배정된 계정 없음${
+                currentDutyPersonText ? ` (현재 표시 텍스트: ${currentDutyPersonText})` : ""
+              }`
+        }
+      />
 
       <div className="space-y-2">
         <Label htmlFor={`${idPrefix}-slotMode`}>슬롯 정책</Label>
@@ -281,7 +313,17 @@ function PatternFormFields({
   );
 }
 
-export function ClubDayPatternsPanel({ patterns }: { patterns: ClubDayPatternRow[] }) {
+export function ClubDayPatternsPanel({
+  patterns,
+  dutyPersons,
+}: {
+  patterns: ClubDayPatternRow[];
+  /**
+   * 활성 듀티 계정 목록. 어떤 패턴의 현재 값이 이미 비활성화된 계정을 가리키면 그 계정도
+   * 포함되어 내려온다(선택값이 사라지지 않도록, requirements.md 28.3번).
+   */
+  dutyPersons: DutyPersonOption[];
+}) {
   const router = useRouter();
 
   const [createForm, setCreateForm] = useState<PatternFormState>(initialCreateForm);
@@ -295,12 +337,19 @@ export function ClubDayPatternsPanel({ patterns }: { patterns: ClubDayPatternRow
   async function handleCreateSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setCreateError(null);
+
+    // 패턴 등록 시 듀티 담당자는 최소 1명 필요하다(기존 단일 드롭다운의 required와 동일한 정책).
+    if (createForm.dutyPersonIds.length === 0) {
+      setCreateError("듀티 담당자를 한 명 이상 선택해주세요.");
+      return;
+    }
+
     setCreateLoading(true);
     try {
       const res = await fetch("/api/admin/club-day-patterns", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(buildPayload(createForm)),
+        body: JSON.stringify(buildPayload(createForm, dutyPersons, "")),
       });
       const json = await res.json();
       if (!res.ok) {
@@ -335,10 +384,11 @@ export function ClubDayPatternsPanel({ patterns }: { patterns: ClubDayPatternRow
     setRowLoadingId(id);
     setRowError((prev) => ({ ...prev, [id]: "" }));
     try {
+      const currentText = patterns.find((p) => p.id === id)?.dutyPerson ?? "";
       const res = await fetch(`/api/admin/club-day-patterns/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(buildPayload(editForm)),
+        body: JSON.stringify(buildPayload(editForm, dutyPersons, currentText)),
       });
       const json = await res.json();
       if (!res.ok) {
@@ -409,7 +459,12 @@ export function ClubDayPatternsPanel({ patterns }: { patterns: ClubDayPatternRow
         </CardHeader>
         <CardContent>
           <form onSubmit={handleCreateSubmit} className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <PatternFormFields idPrefix="create" form={createForm} update={updateCreate} />
+            <PatternFormFields
+              idPrefix="create"
+              form={createForm}
+              update={updateCreate}
+              dutyPersons={dutyPersons.filter((p) => p.isActive)}
+            />
 
             {createError && (
               <p role="alert" aria-live="assertive" className="col-span-full text-sm text-destructive">
@@ -458,7 +513,15 @@ export function ClubDayPatternsPanel({ patterns }: { patterns: ClubDayPatternRow
                   <TableRow key={pattern.id}>
                     <TableCell colSpan={9}>
                       <div className="grid grid-cols-1 gap-4 py-2 sm:grid-cols-2 lg:grid-cols-3">
-                        <PatternFormFields idPrefix={`edit-${pattern.id}`} form={editForm} update={updateEdit} />
+                        <PatternFormFields
+                          idPrefix={`edit-${pattern.id}`}
+                          form={editForm}
+                          update={updateEdit}
+                          dutyPersons={dutyPersons.filter(
+                            (p) => p.isActive || pattern.dutyPersonIds.includes(p.id)
+                          )}
+                          currentDutyPersonText={pattern.dutyPerson}
+                        />
                         <div className="col-span-full flex flex-col items-start gap-2">
                           <div className="flex gap-2">
                             <Button

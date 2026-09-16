@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { DutyPersonMultiSelect, type DutyPersonOption } from "@/components/admin/DutyPersonMultiSelect";
 
 type SlotMode = "SEPARATED" | "COMBINED";
 
@@ -17,6 +18,8 @@ export interface EditableBookingDay {
   endTime: string;
   location: string;
   dutyPerson: string;
+  /** 현재 배정된 듀티 담당자 계정 id 목록(다중, decisions.md D-39). 체크박스 초기 선택 상태. */
+  dutyPersonIds: string[];
   totalSlots: number;
   annualSlots: number;
   casualSlots: number;
@@ -24,12 +27,20 @@ export interface EditableBookingDay {
   isOpen: boolean;
 }
 
+export type { DutyPersonOption };
+
 export function EditBookingDayForm({
   bookingDay,
   confirmedCount,
+  dutyPersons,
 }: {
   bookingDay: EditableBookingDay;
   confirmedCount: number;
+  /**
+   * 활성 계정 목록. 현재 배정된 계정 중 비활성화된 것이 있으면 그 계정도 포함되어 내려온다
+   * (선택 상태가 사라지거나 저장 시 의도치 않게 풀리지 않도록, requirements.md 28.3번).
+   */
+  dutyPersons: DutyPersonOption[];
 }) {
   const router = useRouter();
   const [form, setForm] = useState({
@@ -37,7 +48,7 @@ export function EditBookingDayForm({
     startTime: bookingDay.startTime,
     endTime: bookingDay.endTime,
     location: bookingDay.location,
-    dutyPerson: bookingDay.dutyPerson,
+    dutyPersonIds: bookingDay.dutyPersonIds,
     totalSlots: String(bookingDay.totalSlots),
     annualSlots: String(bookingDay.annualSlots),
     casualSlots: String(bookingDay.casualSlots),
@@ -55,6 +66,7 @@ export function EditBookingDayForm({
   const computedTotalSlots = Number(form.annualSlots || 0) + Number(form.casualSlots || 0);
   const totalSlotsNum = isSeparated ? computedTotalSlots : Number(form.totalSlots || 0);
   const showOverbookWarning = confirmedCount > totalSlotsNum;
+  const selectedDutyPersons = dutyPersons.filter((p) => form.dutyPersonIds.includes(p.id));
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -69,7 +81,14 @@ export function EditBookingDayForm({
           startTime: form.startTime,
           endTime: form.endTime,
           location: form.location,
-          dutyPerson: form.dutyPerson,
+          // 선택한 계정 id 목록 전체를 보낸다(다중 배정, 항상 전체 교체 — D-39).
+          // 1명 이상이면 서버가 이름순 결합 텍스트로 dutyPerson을 덮어쓰고,
+          // 빈 배열이면 배정만 전부 해제하고 아래 텍스트(기존 값)를 그대로 유지한다.
+          dutyPerson:
+            selectedDutyPersons.length > 0
+              ? selectedDutyPersons.map((p) => p.name).join(", ")
+              : bookingDay.dutyPerson,
+          dutyPersonIds: form.dutyPersonIds,
           totalSlots: isSeparated ? computedTotalSlots : Number(form.totalSlots),
           slotMode: form.slotMode,
           annualSlots: isSeparated ? Number(form.annualSlots || 0) : undefined,
@@ -134,15 +153,17 @@ export function EditBookingDayForm({
             />
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="edit-dutyPerson">듀티 담당자</Label>
-            <Input
-              id="edit-dutyPerson"
-              value={form.dutyPerson}
-              onChange={(e) => update("dutyPerson", e.target.value)}
-              required
-            />
-          </div>
+          {/* 기존 예약일은 배정된 계정이 없고 텍스트만 있을 수 있다(소급 반영 없음, D-36·D-39).
+              아무것도 체크하지 않으면 배정 없이 현재 텍스트가 그대로 유지된다. */}
+          <DutyPersonMultiSelect
+            idPrefix="edit-booking-day"
+            options={dutyPersons}
+            selectedIds={form.dutyPersonIds}
+            onChange={(next) => update("dutyPersonIds", next)}
+            emptySelectionHint={`배정된 계정 없음${
+              bookingDay.dutyPerson ? ` (현재 표시 텍스트: ${bookingDay.dutyPerson})` : ""
+            }`}
+          />
 
           <div className="space-y-2">
             <Label htmlFor="edit-slotMode">슬롯 정책</Label>

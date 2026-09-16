@@ -21,6 +21,7 @@
 |---|---|
 | `ADMIN_PASSWORD` | 관리자 로그인 비밀번호(평문). 검토했던 해시 저장 방식은 decisions.md D-11/D-13 참고 — 관리자 1인 체제 + MVP 규모에서는 설정 편의를 우선해 평문 유지로 최종 결정 |
 | `ADMIN_SESSION_SECRET` | 관리자 세션 쿠키 서명용 HMAC 키 (`ADMIN_PASSWORD`와 별도 값) |
+| `DUTY_SESSION_SECRET` | 듀티 담당자 세션 쿠키 서명용 HMAC 키 (requirements.md 28.4번, D-38). `ADMIN_SESSION_SECRET`과 반드시 다른 값을 쓴다 — 두 세션의 권한 범위가 다르므로 키를 공유하면 안 된다 |
 | `TURSO_DATABASE_URL` | Turso DB 연결 URL |
 | `TURSO_AUTH_TOKEN` | Turso 인증 토큰 |
 | `PII_SECRET_KEY` | 전화번호 `phoneHash`/`phoneEncrypted` 계산용 마스터 키(D-10) |
@@ -30,9 +31,11 @@
 
 **최초 설정 절차**
 1. 원하는 관리자 비밀번호를 `ADMIN_PASSWORD`에 그대로 등록한다.
-2. Turso CLI로 데이터베이스를 생성하고 `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN`을 발급받아 등록한다.
-3. `PII_SECRET_KEY`를 안전하게 생성(예: `openssl rand -base64 32`)해 등록한다.
-4. `CRON_SECRET`을 16자 이상의 임의 문자열로 생성(예: `openssl rand -hex 32`)해 등록한다. 개행/특수문자가 섞이지 않도록 주의한다(Authorization 헤더 값으로 그대로 쓰이기 때문).
+2. `ADMIN_SESSION_SECRET`을 임의의 긴 문자열로 생성(예: `openssl rand -base64 32`)해 등록한다(`ADMIN_PASSWORD`와 다른 값).
+3. `DUTY_SESSION_SECRET`을 같은 방식으로 **따로** 생성(예: `openssl rand -base64 32`)해 등록한다. `ADMIN_SESSION_SECRET`을 재사용하지 않는다(D-38).
+4. Turso CLI로 데이터베이스를 생성하고 `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN`을 발급받아 등록한다.
+5. `PII_SECRET_KEY`를 안전하게 생성(예: `openssl rand -base64 32`)해 등록한다.
+6. `CRON_SECRET`을 16자 이상의 임의 문자열로 생성(예: `openssl rand -hex 32`)해 등록한다. 개행/특수문자가 섞이지 않도록 주의한다(Authorization 헤더 값으로 그대로 쓰이기 때문).
 
 ---
 

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { listBookingDays } from "@/lib/services/bookingDayService";
+import { listDutyPersons } from "@/lib/services/dutyPersonService";
 import { formatDateOnlyInTimeZone, getDayOfWeekLabelKo } from "@/lib/timezone";
 import { CreateBookingDayForm } from "@/components/admin/CreateBookingDayForm";
 import { Badge } from "@/components/ui/badge";
@@ -16,7 +17,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 export const dynamic = "force-dynamic";
 
 export default async function AdminBookingDaysPage() {
-  const bookingDays = await listBookingDays({ sort: "desc" });
+  const [bookingDays, dutyPersons] = await Promise.all([
+    listBookingDays({ sort: "desc" }),
+    // 생성 폼의 체크박스 목록은 활성 계정만 보여준다(requirements.md 28.3번, decisions.md D-39).
+    listDutyPersons({ activeOnly: true }),
+  ]);
 
   return (
     <div className="space-y-8">
@@ -27,7 +32,9 @@ export default async function AdminBookingDaysPage() {
         </p>
       </div>
 
-      <CreateBookingDayForm />
+      <CreateBookingDayForm
+        dutyPersons={dutyPersons.map((p) => ({ id: p.id, name: p.name, isActive: p.isActive }))}
+      />
 
       <Card>
         <CardHeader>
