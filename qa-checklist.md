@@ -306,13 +306,18 @@
 
 ---
 
-## 12-2. 듀티 담당자 계정 및 듀티 전용 화면 (decisions.md D-36~D-38, requirements.md §28) — 검증 2026-09-09, **미해결 결함 1건(예약일 수정 500)**
+## 12-2. 듀티 담당자 계정 및 듀티 전용 화면 (decisions.md D-36~D-39, requirements.md §28) — 검증 2026-09-09, **다대다 재구현분 재검증 2026-09-15 (D-39) — 전 항목 통과**
 
-> **재검증 필요 (decisions.md D-39, requirements.md §28.3 개정)**: 이 브랜치가 main에 merge되기 전에 "예약일/패턴당 듀티 담당자 1명" 전제가 "여러 명(N명, 인원 상한 없음)"으로 바뀌었다(단일 FK `dutyPersonId` → 다대다 조인 테이블 `BookingDayDutyPerson`/`ClubDayPatternDutyPerson`). 아래 체크 항목 중 "스키마/마이그레이션", "예약일/패턴과의 연결" 절의 항목들은 단일 선택 드롭다운 시절의 동작을 검증한 것이라 재구현 후 다시 검증해야 한다. 계정 관리(`/admin/duty-persons`)·인증/세션(D-38)·듀티 화면 읽기 전용 원칙 절은 이번 개정의 영향을 받지 않으므로 그대로 유효하다.
+> **재검증 완료 (decisions.md D-39, requirements.md §28.3 개정, 2026-09-15)**: "예약일/패턴당 듀티 담당자 1명"(단일 FK `dutyPersonId`) 전제가 "여러 명(N명, 인원 상한 없음)"(다대다 조인 테이블 `BookingDayDutyPerson`/`ClubDayPatternDutyPerson`)으로 재구현되어, 아래 "스키마/마이그레이션"·"예약일/패턴과의 연결" 절을 D-39 기준으로 다시 작성/검증했다. 2026-09-09 검증에서 미해결이던 결함(예약일 수정 시 P2028 트랜잭션 타임아웃 → 500)도 이번 재구현분에서 회귀 없음을 반복 호출로 확인해 해소 처리했다. 계정 관리(`/admin/duty-persons`)·인증/세션(D-38)·듀티 화면 읽기 전용 원칙 절은 이번 개정의 영향을 받지 않아 그대로 유효하며, 재검증에서도 동일하게 동작함을 확인했다.
 
 ### 스키마/마이그레이션
 
-- [x] `prisma/migrations/20260909060437_add_duty_person/migration.sql`이 테이블 재생성(RedefineTables)이 아니라 `ALTER TABLE ... ADD COLUMN ... REFERENCES` 형태의 순수 additive 마이그레이션이며, 적용 후 `prisma migrate status`가 "up to date"이고 `prisma migrate diff --from-schema-datasource --to-schema-datamodel`이 빈 마이그레이션(드리프트 없음)을 반환한다. 적용된 DB에서 `BookingDay`/`ClubDayPattern`의 `dutyPersonId` FK(`ON DELETE SET NULL ON UPDATE CASCADE`), `DutyPerson_name_key` 유니크 인덱스, `*_dutyPersonId_idx` 인덱스가 모두 생성됨을 `.schema`/`PRAGMA foreign_key_list`로 확인. 기존 `BookingDay`/`ClubDayPattern` 행은 그대로 남고 `dutyPersonId`만 `NULL`로 추가됨.
+- [x] `prisma/migrations/20260909060437_add_duty_person/migration.sql`이 테이블 재생성(RedefineTables)이 아니라 `ALTER TABLE ... ADD COLUMN ... REFERENCES` 형태의 순수 additive 마이그레이션이며, `DutyPerson_name_key` 유니크 인덱스가 생성된다. (D-39에서 `dutyPersonId` 컬럼/인덱스는 제거되었으므로 그 부분은 아래 항목으로 대체된다.)
+- [x] **(D-39)** `prisma/migrations/20260914164725_replace_duty_person_fk_with_join_tables/migration.sql`이 `BookingDay`/`ClubDayPattern` 두 테이블만 SQLite 공식 재생성 절차(`PRAGMA defer_foreign_keys=ON` + `foreign_keys=OFF` → 새 테이블 생성 → 컬럼 명시 `INSERT ... SELECT` → `DROP`/`RENAME` → 인덱스 재생성)로 다시 만들어 `dutyPersonId` 컬럼 + FK 제약 + 인덱스를 제거하고, 조인 테이블 2개는 순수 additive로 추가한다. SQLite가 FK 제약이 참조하는 컬럼을 `DROP COLUMN`으로 지울 수 없다는 제약 때문이며, 마이그레이션 주석에 근거가 남아 있다. `DutyPerson` 테이블은 건드리지 않는다.
+- [x] **(D-39)** 적용 후 `prisma migrate status`가 "Database schema is up to date!"(8개 마이그레이션 인식)이고, `prisma migrate diff --from-schema-datasource --to-schema-datamodel`이 "No difference detected."(드리프트 없음)를 반환한다.
+- [x] **(D-39)** 재생성된 두 테이블에 `dutyPersonId` 컬럼과 `*_dutyPersonId_idx` 인덱스가 남아 있지 않고, `Booking_bookingDayId_fkey`(→`BookingDay`) 등 다른 테이블의 참조 FK가 그대로 복원되어 있다(`.schema`로 확인). `PRAGMA foreign_key_check` 위반 0건, `PRAGMA integrity_check` = `ok`.
+- [x] **(D-39)** 재생성 과정에서 기존 행이 유실되지 않았다 — 마이그레이션 이전에 만들어진 `BookingDay`/`Booking`/`ClubDayPattern`(2026-08~09 생성분)과 `AnnualMember` 34건이 그대로 남아 있음을 확인. `dutyPersonId`에 들어 있던 로컬 테스트 값만 사라지고 `dutyPerson` 텍스트는 보존된다(D-39 "백필 없음" 결정과 일치).
+- [x] **(D-39)** 조인 테이블 FK가 결정대로 비대칭이다 — `BookingDayDutyPerson.bookingDayId`는 `ON DELETE CASCADE`, `ClubDayPatternDutyPerson.clubDayPatternId`는 `ON DELETE RESTRICT`, 양쪽 `dutyPersonId`는 모두 `RESTRICT`. 복합 PK(`(bookingDayId, dutyPersonId)` / `(clubDayPatternId, dutyPersonId)`)와 `dutyPersonId` 인덱스도 생성됨.
 - [x] `npx tsc --noEmit`, `npm run build` 모두 통과(경고/에러 없음).
 
 ### 계정 관리 (`/admin/duty-persons`)
@@ -323,15 +328,21 @@
 - [x] 계정 하드 삭제 버튼/라우트가 존재하지 않는다(D-37 — 비활성화 토글만 제공). 화면 버튼은 "이름/비밀번호 변경"·"비활성화"뿐이고, `DELETE /api/admin/duty-persons/[id]`는 405.
 - [x] 어떤 화면/API 응답에도 `passwordHash`가 노출되지 않는다(DB에도 평문 비밀번호가 저장되지 않고 `salt:hash` 형식으로만 저장된다). 라우트가 `id/name/isActive/createdAt/updatedAt`만 매핑, 관리자 페이지도 `id/name/isActive`만 클라이언트로 내려보냄. DB 조회 결과는 `32자 hex salt : 128자 hex hash` 형식(scrypt).
 
-### 예약일/패턴과의 연결
+### 예약일/패턴과의 연결 (D-39 다대다 기준으로 재작성, 재검증 2026-09-15)
 
-- [x] 예약일 생성/수정 폼과 클럽데이 패턴 등록/수정 폼의 듀티 담당자 입력이 자유 텍스트가 아니라 활성 계정 드롭다운이다. **생성** 폼은 `required`(계정이 0건이면 "등록된 듀티 담당자가 없습니다…" 안내가 뜨고 생성 불가), **수정** 폼은 `required` 아님(기존 미연결 예약일/패턴 보존). 단, 서버 API는 UI와 무관하게 `dutyPersonId` 없이 `dutyPerson` 텍스트만으로도 생성이 가능하다(의도된 유연성 — `POST /api/admin/booking-days`에 텍스트만 보내 201 확인).
-- [x] 드롭다운에서 계정을 선택해 **생성**하면 `dutyPersonId`와 표시용 `dutyPerson` 텍스트(계정 이름)가 함께 저장된다. 클라이언트가 보낸 텍스트는 신뢰하지 않고 서버가 계정 `name`으로 덮어쓴다 — 예약일/패턴 모두 `dutyPerson:"엉뚱한이름XYZ"` + 올바른 `dutyPersonId`로 POST했을 때 저장값이 계정 이름으로 강제 동기화됨을 확인. 존재하지 않는 `dutyPersonId`는 `VALIDATION_ERROR` 400(FK 위반 500이 아님).
-- [x] 클럽데이 **패턴 수정**(`PATCH /api/admin/club-day-patterns/[id]`)도 동일하게 동기화되고, `dutyPersonId: null`을 보내면 연결만 해제되고 텍스트는 유지된다. 화면에서 드롭다운 선택 후 저장 → 목록 "듀티" 칼럼이 계정 이름으로 갱신됨을 확인.
-- [ ] **(실패)** **예약일 수정**(`PATCH /api/admin/booking-days/[id]`)에 `dutyPersonId`(비어 있지 않은 값)를 보내면 항상 5초 지연 후 500(`INTERNAL_ERROR`)이 난다 → `EditBookingDayForm`은 항상 `dutyPersonId`를 전송하므로, **듀티 계정이 연결된 예약일은 어떤 항목도 수정할 수 없고, 기존 예약일에 듀티 계정을 새로 연결할 수도 없다.** 원인: `updateBookingDay`가 `prisma.$transaction` 내부에서 트랜잭션 밖 클라이언트(`prisma`)를 쓰는 `getAssignableDutyPerson`을 호출해 libSQL/SQLite 잠금 대기 → Prisma P2028(트랜잭션 5초 타임아웃). `dutyPersonId: null`(연결 해제)이나 `dutyPersonId` 키 자체를 보내지 않는 경로는 정상 200.
-- [x] 수정 폼에서 현재 값이 비활성화된 계정을 가리키는 경우, 그 계정이 "(비활성)" 표시와 함께 드롭다운에 남아 있어 선택값이 사라지지 않는다. 배정 후 계정을 비활성화하고 예약일 수정 화면을 열어 옵션 `"QA듀티B (비활성)"`이 현재 선택값으로 유지되고 안내 문구가 함께 표시됨을 확인(클럽데이 패턴 수정 폼도 동일).
-- [x] 계정 연결이 없는 기존 예약일/패턴(소급 반영 없음)은 기존 텍스트 값이 그대로 표시되고, 공개 화면 등 기존 동작에 변화가 없다. 듀티 계정이 0건인 상태에서도 기존 예약일 수정 폼이 `"계정 미연결 (현재: 테스터)"` 선택지를 유지한 채 정상 저장되고, 공개 예약일 상세(`/booking-days/[id]`)의 "듀티 담당자" 값이 그대로 노출됨을 확인.
-- [x] 클럽데이 크론(`/api/cron/club-days`)이 자동 생성한 예약일에 패턴의 `dutyPersonId`가 그대로 복사된다(듀티 화면 목록에 바로 나타난다). 패턴에 계정을 배정하고 크론을 실행해 생성된 `BookingDay`의 `dutyPersonId`/`dutyPerson`이 패턴 값과 일치하고, 해당 계정으로 로그인한 듀티 목록에 즉시 나타남을 확인.
+- [x] 예약일 생성/수정 폼과 클럽데이 패턴 등록/수정 폼의 듀티 담당자 입력이 단일 드롭다운이 아니라 **체크박스 다중 선택**(`components/admin/DutyPersonMultiSelect.tsx`, 세 폼 공유)이다. **생성** 폼은 "최소 1명"을 **클라이언트에서만** 강제한다(미선택 제출 시 "듀티 담당자를 한 명 이상 선택해주세요." 인라인 에러 + 요청 자체가 나가지 않음 — 예약일/패턴 폼 양쪽 화면에서 확인). 서버 API는 의도적으로 유연해서 `dutyPersonIds` 없이 `dutyPerson` 텍스트만으로도 생성 가능하다(`POST /api/admin/booking-days`·`/api/admin/club-day-patterns` 모두 201, `dutyPersonIds: []` 응답).
+- [x] 한 예약일에 듀티 계정을 **3명 이상** 배정할 수 있고 인원 상한이 없다(5명 동시 배정 200 확인). 배정된 계정 전원이 각자 독립적으로 로그인해 자기 목록·상세에서 그 예약일을 본다(3계정 각각 `GET /api/duty/booking-days` 1건, 상세 200). 배정되지 않은 계정은 목록이 비어 있고 상세는 404다.
+- [x] `dutyPerson` 표시 텍스트가 **서버에서 이름순 정렬**되어 저장된다. 계정 id를 알파벳/가나다 역순으로 보내고 `dutyPerson`에 임의 텍스트(`"클라이언트가보낸임의텍스트"`)를 함께 보내도, 저장/응답값은 계정 `name`을 `localeCompare(ko)` 오름차순으로 정렬해 `", "`로 이은 문자열로 덮어써진다(예약일·패턴 생성/수정 모두 확인). 같은 집합을 다른 순서로 재전송해도 결과 문자열이 동일하고, 중복 id는 중복 제거되어 조인 행이 1개만 생긴다.
+- [x] **부분 실패가 없다(all-or-nothing, D-39)**. 존재하지 않는 id를 섞어 보내면 `VALIDATION_ERROR` 400(`"선택한 듀티 담당자 계정을 찾을 수 없습니다: …"`)으로 요청 전체가 거부된다 — **생성** 시 예약일/패턴이 아예 만들어지지 않고(행 수 불변), **수정** 시 기존 배정·`dutyPerson` 텍스트가 전혀 바뀌지 않는다(예약일·패턴 양쪽 확인). FK 위반 500이 아니다. `dutyPersonIds`가 배열이 아니면 PATCH는 400으로 거부한다.
+- [x] `PATCH`의 부분 업데이트 3가지 케이스가 결정대로 동작한다(예약일·패턴 공통). (a) `dutyPersonIds` 키를 보내지 않으면 기존 배정이 그대로 유지되고 응답 DTO에는 현재 배정이 다시 읽혀 담긴다. (b) 빈 배열 `[]`이면 배정이 전부 해제되고(조인 행 0) `dutyPerson` 텍스트는 관리자가 보낸 값이 그대로 남는다. (c) 새 배열이면 기존 배정을 전부 지우고 통째로 교체하며 텍스트도 이름순 결합값으로 동기화된다. 해제 후에는 이전 담당자의 듀티 목록에서 사라지고 상세는 404가 된다.
+- [x] **트랜잭션 타임아웃(P2028) 회귀 없음** — 2026-09-09 검증에서 실패했던 항목. `updateBookingDay`/`updateClubDayPattern` 모두 `getAssignableDutyPersons`에 열린 트랜잭션 클라이언트(`tx`)를 넘긴다. 듀티 배정을 바꾸는 `PATCH`를 예약일 20회 + 패턴 20회 연속 호출해 전부 200, 응답 시간 최대 0.85초(대부분 0.02~0.03초)로 5초 근처에 닿는 요청이 없음을 확인.
+- [x] POST/PATCH 응답 DTO에 `dutyPersonIds`(이름순 id 배열)와 `dutyPersons`(`{id, name, isActive}` 객체 배열)가 함께 내려온다(예약일·패턴, 생성·수정 모두). 비활성 계정이 배정돼 있으면 `isActive: false`로 정확히 반영된다.
+- [x] 수정 폼에서 이미 배정된 계정이 그 사이 비활성화된 경우, 그 계정이 `(비활성)` 배지와 함께 체크박스 목록에 남아 **체크된 상태**로 유지되고 "배정된 계정 중 비활성 상태가 있습니다(…)" 안내가 뜬다(예약일 수정 화면·클럽데이 패턴 수정 폼 양쪽 확인). 생성 폼에는 비활성 계정이 나타나지 않는다. 비활성 계정을 포함해 그대로 다시 저장해도 200이며 배정이 풀리지 않는다.
+- [x] 관리자 화면에서 체크박스를 실제로 켜고/꺼서 저장하는 흐름이 정상 동작한다(예약일 상세 수정 폼에서 1명 해제 + 2명 추가 후 저장 → 상세 "듀티 담당자" 값과 목록 "듀티" 칼럼이 이름순 결합 텍스트로 갱신).
+- [x] 배정된 계정이 없는 기존 예약일/패턴(소급 반영 없음)은 기존 텍스트 값이 그대로 표시되고, 공개 화면 등 기존 동작에 변화가 없다. 공개 예약일 상세(`/booking-days/[id]`)의 "듀티 담당자"가 여러 명을 이어붙인 문자열(`"QA39-가온, QA39-힐데"`)을 그대로 보여준다.
+- [x] 클럽데이 크론(`/api/cron/club-days`)이 자동 생성한 예약일에 패턴에 배정된 계정 **전원**이 복사된다(1명만 복사되는 회귀 없음). 패턴에 3명을 배정하고 크론을 실행해 생성된 `BookingDay`의 조인 행 3개 + `dutyPerson` 텍스트가 패턴과 일치하고, 세 계정 모두 로그인 즉시 그 예약일을 보며 배정되지 않은 계정은 404임을 확인.
+- [x] 예약일 하드 삭제 시 `BookingDayDutyPerson` 조인 행이 cascade로 함께 사라지고(`DELETE /api/admin/booking-days/[id]` 후 조인 행 0), `DutyPerson` 계정 레코드 자체는 남는다. `ClubDayPattern`은 하드 삭제 경로가 코드에 존재하지 않아(`deleteClubDayPattern`은 `deletedAt`+`isActive=false` 소프트 삭제) `ClubDayPatternDutyPerson`에 cascade가 없어도 문제되지 않는다 — 배정이 있는 패턴을 소프트 삭제해도 200이고 조인 행은 그대로 남으며 크론 대상에서만 빠진다. `prisma.clubDayPattern.delete(...)`/`prisma.dutyPerson.delete(...)` 호출은 코드 전체에 없다.
+- [x] 듀티 화면에는 "이 예약일에 나 말고 누가 더 배정되어 있는지"를 알 수 있는 요소가 없다(§28.5) — 듀티 목록/상세 화면 어디에도 `dutyPerson` 텍스트나 다른 담당자 이름을 렌더링하지 않는다(`components/duty/**`에 `dutyPerson` 참조 없음). 같은 예약일에 배정된 계정들은 모두 동일한 참여자 명단(이름/상태만)을 본다.
 
 ### 로그인/세션 (`/duty/login`)
 
@@ -359,6 +370,12 @@
 
 - 관리자 로그인 폼에는 실제 `ADMIN_PASSWORD`를 입력하지 않는 기존 QA 정책(10-3 참고)에 따라, 관리자 화면은 `POST /api/admin/login`(curl)으로 발급받은 세션 쿠키를 브라우저에 넣어 조작했다. 듀티 로그인 폼은 QA용으로 새로 만든 임시 계정의 비밀번호로 브라우저에서 직접 입력해 검증했다.
 - 검증에 사용한 듀티 계정 2건, 예약일 5건(크론 자동 생성분 포함), 클럽데이 패턴 1건, 예약 2건은 모두 정리했다.
+
+**QA 환경 제약(2026-09-15, D-39 재검증)**
+
+- 로컬 기본 `node`가 v16이라 Prisma CLI(WASM)와 `next dev`가 모두 실패한다. 이번 검증은 `~/.nvm/versions/node/v20.19.4/bin`을 `PATH` 앞에 붙여 실행했다. `.claude/launch.json`의 `dev` 구성은 `runtimeExecutable`만 nvm 절대 경로라 `npm`이 다시 `PATH`의 node v16을 집어 기동에 실패하므로, 개발 서버는 Bash로 직접 띄웠다.
+- `npm run build`가 `.next`를 프로덕션 산출물로 덮어쓰므로, 브라우저 QA 전에 `.next`를 지우고 dev 서버를 다시 띄웠다.
+- 검증에 사용한 듀티 계정 4건(`QA39-가온`/`QA39-나루`/`QA39-무배정`/`QA39-힐데`), 예약일 3건(크론 자동 생성분 포함), 클럽데이 패턴 2건, 예약 1건과 DEV가 남겨둔 검증 데이터(듀티 계정 4건, 패턴 1건, 크론 생성 예약일 1건)를 모두 정리했다. `DutyPerson`은 하드 삭제가 없으므로(D-37) 전부 `isActive=false`로 비활성화했고, `ClubDayPattern`은 소프트 삭제(`deletedAt`)만 가능하므로 소프트 삭제 후 `ClubDayPatternDutyPerson` 조인 행은 설계상 남는다(cascade 없음, D-39).
 
 ---
 
