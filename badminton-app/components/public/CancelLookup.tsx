@@ -135,8 +135,22 @@ export function CancelLookup() {
   async function handleUploadFile(bookingId: string, file: File) {
     setUploadingId(bookingId);
     setPaymentMessage((prev) => ({ ...prev, [bookingId]: { text: "", isError: false } }));
+    const failWith = (text: string) =>
+      setPaymentMessage((prev) => ({ ...prev, [bookingId]: { text, isError: true } }));
     try {
       const compressed = await compressImageFile(file);
+      // 압축이 실패해 원본으로 폴백된 경우(카톡 인앱 웹뷰 등, D-40) HEIC/빈 type/2MB 초과 파일이
+      // 그대로 전송돼 서버 400이나 Vercel의 HTML 413을 받게 된다. 보내기 전에 같은 기준으로
+      // 걸러서 원인을 알 수 있는 문구를 보여준다(서버 기준: lib/services/paymentProofService.ts의
+      // ALLOWED_MIME_TYPES / MAX_PROOF_FILE_SIZE_BYTES).
+      if (!["image/jpeg", "image/png", "image/webp"].includes(compressed.type)) {
+        failWith(t.paymentUploadInvalidType);
+        return;
+      }
+      if (compressed.size > 2 * 1024 * 1024) {
+        failWith(t.paymentUploadTooLarge);
+        return;
+      }
       const formData = new FormData();
       formData.append("file", compressed);
       formData.append("phone", phone);
@@ -145,17 +159,15 @@ export function CancelLookup() {
         method: "POST",
         body: formData,
       });
-      const json = await res.json();
+      // 본문이 JSON이 아닐 수 있다(예: 요청 본문 상한 초과 시 Vercel이 돌려주는 HTML 413).
+      // 그대로 throw되면 catch에서 "네트워크 오류"로 잘못 표시되므로 null로 흘려보낸다.
+      const json = await res.json().catch(() => null);
       if (!res.ok) {
-        setPaymentMessage((prev) => ({
-          ...prev,
-          [bookingId]: {
-            text: json?.error?.message
-              ? translateApiErrorMessage(locale, json.error.message)
-              : t.paymentUploadFallbackError,
-            isError: true,
-          },
-        }));
+        failWith(
+          json?.error?.message
+            ? translateApiErrorMessage(locale, json.error.message)
+            : t.paymentUploadFallbackError
+        );
         return;
       }
       setBookings(
@@ -166,7 +178,7 @@ export function CancelLookup() {
         [bookingId]: { text: t.paymentUploadSuccess, isError: false },
       }));
     } catch {
-      setPaymentMessage((prev) => ({ ...prev, [bookingId]: { text: t.networkError, isError: true } }));
+      failWith(t.paymentUploadNetworkError);
     } finally {
       setUploadingId(null);
     }
