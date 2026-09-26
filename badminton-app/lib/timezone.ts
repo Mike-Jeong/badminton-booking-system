@@ -84,7 +84,12 @@ function dateTimeOnlyToUtc(dateOnly: string, hour: number, minute: number): Date
   const offsetMinutes = getTimeZoneOffsetMinutes(utcGuess, AUCKLAND_TIME_ZONE);
   // local(Auckland) = UTC + offset  =>  UTC = local - offset
   // utcGuess를 "Auckland 기준 y-m-d hh:mm 시점의 로컬 시각"으로 보정한다.
-  return new Date(utcGuess.getTime() - offsetMinutes * 60_000);
+  const firstPass = new Date(utcGuess.getTime() - offsetMinutes * 60_000);
+  // 서머타임 전환일에는 1차 추정 시점과 보정 결과 시점의 오프셋이 다를 수 있다(예: 9/27 자정은
+  // NZST(+12)인데 UTC 9/27 00:00은 이미 NZDT(+13)라 1시간 일찍 계산되어 전날 23:00이 된다).
+  // 보정 결과 시점의 오프셋으로 한 번 더 계산해 바로잡는다.
+  const secondOffset = getTimeZoneOffsetMinutes(firstPass, AUCKLAND_TIME_ZONE);
+  return secondOffset === offsetMinutes ? firstPass : new Date(utcGuess.getTime() - secondOffset * 60_000);
 }
 
 /**
