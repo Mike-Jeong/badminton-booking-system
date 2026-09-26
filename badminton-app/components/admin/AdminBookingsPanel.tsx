@@ -79,7 +79,7 @@ export function AdminBookingsPanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: "CONFIRMED" }),
       });
-      const json = await res.json();
+      const json = await res.json().catch(() => null);
       if (!res.ok) {
         setRowError((prev) => ({ ...prev, [id]: json?.error?.message ?? "승인에 실패했습니다." }));
         return;
@@ -98,7 +98,7 @@ export function AdminBookingsPanel({
     setRowError((prev) => ({ ...prev, [id]: "" }));
     try {
       const res = await fetch(`/api/admin/bookings/${id}/cancel`, { method: "POST" });
-      const json = await res.json();
+      const json = await res.json().catch(() => null);
       if (!res.ok) {
         setRowError((prev) => ({ ...prev, [id]: json?.error?.message ?? "취소에 실패했습니다." }));
         return;
@@ -121,7 +121,7 @@ export function AdminBookingsPanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ bookingDayId, name: addForm.name, phone: addForm.phone }),
       });
-      const json = await res.json();
+      const json = await res.json().catch(() => null);
       if (!res.ok) {
         setAddError(json?.error?.message ?? "예약 추가에 실패했습니다.");
         return;
@@ -144,7 +144,7 @@ export function AdminBookingsPanel({
     setPaymentError((prev) => ({ ...prev, [bookingId]: "" }));
     try {
       const res = await fetch(`/api/admin/bookings/${bookingId}/payment-proof`);
-      const json = await res.json();
+      const json = await res.json().catch(() => null);
       if (!res.ok) {
         setPaymentError((prev) => ({ ...prev, [bookingId]: json?.error?.message ?? "이미지를 불러오지 못했습니다." }));
         return;
@@ -168,7 +168,7 @@ export function AdminBookingsPanel({
         method: "POST",
         body: formData,
       });
-      const json = await res.json();
+      const json = await res.json().catch(() => null);
       if (!res.ok) {
         setPaymentError((prev) => ({ ...prev, [bookingId]: json?.error?.message ?? "업로드에 실패했습니다." }));
         return;
@@ -196,7 +196,7 @@ export function AdminBookingsPanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ confirmed }),
       });
-      const json = await res.json();
+      const json = await res.json().catch(() => null);
       if (!res.ok) {
         setPaymentError((prev) => ({ ...prev, [bookingId]: json?.error?.message ?? "처리에 실패했습니다." }));
         return;

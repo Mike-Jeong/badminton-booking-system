@@ -8,17 +8,33 @@
 
 const DEFAULT_MAX_WIDTH = 1024; // 가로 최대 1024px
 const DEFAULT_QUALITY = 0.7; // JPEG quality ~0.7
+const IMAGE_LOAD_TIMEOUT_MS = 8_000; // 이미지 디코딩 상한
+const COMPRESS_TIMEOUT_MS = 10_000; // 압축 전체(로딩+캔버스+toBlob) 상한
 
 export interface CompressImageOptions {
   maxWidth?: number;
   quality?: number;
 }
 
+/**
+ * 카카오톡 인앱 웹뷰(특히 갤럭시 Android 13/14)에서는 미디어 선택창으로 고른 파일의 objectURL이
+ * onload/onerror 어느 쪽도 부르지 않고 영원히 멈추는 사례가 보고됐다(decisions.md D-40).
+ * 타임아웃이 없으면 업로드 버튼이 "업로드 중..."에서 영구히 멈추므로 상한을 둔다.
+ */
 function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error("이미지를 불러오지 못했습니다."));
+    const timer = setTimeout(() => {
+      reject(new Error("이미지를 불러오지 못했습니다(시간 초과)."));
+    }, IMAGE_LOAD_TIMEOUT_MS);
+    img.onload = () => {
+      clearTimeout(timer);
+      resolve(img);
+    };
+    img.onerror = () => {
+      clearTimeout(timer);
+      reject(new Error("이미지를 불러오지 못했습니다."));
+    };
     img.src = src;
   });
 }
@@ -27,11 +43,27 @@ function loadImage(src: string): Promise<HTMLImageElement> {
  * 이미지 파일을 가로 최대 maxWidth로 리사이즈하고 JPEG(quality)로 재인코딩한 새 File을
  * 반환한다. Canvas/이미지 디코딩이 실패하는 극히 예외적인 환경에서는 원본 파일을 그대로
  * 반환한다(업로드 자체가 막히지 않도록 하는 방어적 폴백 — 서버 측 2MB 상한이 최종 방어선).
+ * 전체 과정에 10초 상한을 두어, 인앱 웹뷰에서 디코딩/toBlob이 영영 콜백을 부르지 않아도
+ * 같은 폴백(원본 반환)으로 빠져나온다 — 절대 pending 상태로 멈추지 않는다(D-40).
  */
 export async function compressImageFile(
   file: File,
   options: CompressImageOptions = {}
 ): Promise<File> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      compress(file, options),
+      new Promise<File>((resolve) => {
+        timer = setTimeout(() => resolve(file), COMPRESS_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function compress(file: File, options: CompressImageOptions): Promise<File> {
   const maxWidth = options.maxWidth ?? DEFAULT_MAX_WIDTH;
   const quality = options.quality ?? DEFAULT_QUALITY;
 

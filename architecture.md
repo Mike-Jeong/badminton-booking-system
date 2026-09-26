@@ -128,7 +128,11 @@ lib/
                                 # formatDateTimeInTimeZone — 이벤트 발생 시각 "YYYY-MM-DD HH:mm" 표시용)
   imageCompression.ts          # compressImageFile — 클라이언트 전용(브라우저 Canvas/Image API),
                                 # 결제증빙 업로드 전 리사이즈/재인코딩 (신규, decisions.md D-32,
-                                # 새 npm 의존성 없음)
+                                # 새 npm 의존성 없음). 로딩 8초/전체 10초 타임아웃을 두어 인앱
+                                # 웹뷰에서도 절대 pending으로 멈추지 않고 원본으로 폴백 (D-40)
+  inAppBrowser.ts              # isKakaoInAppBrowser(userAgent) / openInExternalBrowser(url) —
+                                # 카카오톡 인앱 웹뷰 감지 + kakaotalk://web/openExternal 스킴
+                                # (신규, requirements.md 26.9번, decisions.md D-40)
   localBookingIdentity.ts      # loadSavedIdentity/saveIdentity — 예약 폼 마지막 입력값(이름/전화번호)
                                 # localStorage 캐싱, BookingForm·CancelLookup 공유 (신규, requirements.md 27.6번)
   security/
@@ -160,6 +164,10 @@ components/
     ParticipantQrButton.tsx    # "QR 저장하기" 버튼. code(string) prop을 받아 클릭 시 qrcode를
                                 # 동적 임포트해 PNG로 렌더링 후 다운로드 (신규, requirements.md 27.4번,
                                 # decisions.md D-35). BookingForm/CancelLookup 양쪽에서 재사용
+    KakaoInAppBanner.tsx       # 카카오톡 인앱 웹뷰에서만 뜨는 "외부 브라우저로 열기" 안내 배너.
+                                # 마운트 후 UA 검사(초기 렌더 null), 자동 리다이렉트 없음, 닫기 가능.
+                                # app/(public)/layout.tsx의 PublicHeader 바로 아래에 배치
+                                # (신규, requirements.md 26.9번, decisions.md D-40)
   duty/                        # 듀티 전용 화면 컴포넌트 (신규, requirements.md 28.5번)
     DutyLoginForm.tsx           # name+password 로그인 폼
     DutyBookingDayListView.tsx  # 목록. CancelLookup의 날짜 필터 UX(기본값 오늘~무제한, "필터 초기화")를

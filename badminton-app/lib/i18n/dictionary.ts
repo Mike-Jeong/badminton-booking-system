@@ -95,8 +95,20 @@ export const dictionary = {
       paymentUploading: "업로드 중...",
       paymentUploadSuccess: "증빙이 업로드되었습니다. 관리자 확인을 기다려주세요.",
       paymentUploadFallbackError: "업로드에 실패했습니다.",
-      paymentInvalidFileType: "이미지 파일(jpg/png/webp)만 업로드할 수 있습니다.",
+      paymentUploadInvalidType:
+        "지원하지 않는 이미지 형식입니다. 스크린샷(PNG/JPG)으로 다시 시도해주세요.",
+      paymentUploadTooLarge:
+        "이미지 용량이 너무 큽니다(2MB 이하). 스크린샷을 다시 찍거나 크기를 줄여주세요.",
+      paymentUploadNetworkError:
+        "네트워크 오류가 발생했습니다. 다시 시도하거나, 크롬/사파리 등 다른 브라우저로 열어서 시도해보세요.",
       paymentAmountDue: (amount: number) => `입금 금액 $${amount}`,
+    },
+    // 카카오톡 인앱 브라우저 안내 배너(decisions.md D-40)
+    inApp: {
+      kakaoWarning:
+        "카카오톡 안에서 열면 사진 업로드가 실패할 수 있어요. 외부 브라우저로 열어서 이용해주세요.",
+      openExternal: "외부 브라우저로 열기",
+      dismiss: "닫기",
     },
   },
   en: {
@@ -187,8 +199,19 @@ export const dictionary = {
       paymentUploading: "Uploading...",
       paymentUploadSuccess: "Proof uploaded. Please wait for admin confirmation.",
       paymentUploadFallbackError: "Failed to upload proof.",
-      paymentInvalidFileType: "Only image files (jpg/png/webp) can be uploaded.",
+      paymentUploadInvalidType:
+        "Unsupported image format. Please try again with a screenshot (PNG/JPG).",
+      paymentUploadTooLarge:
+        "The image is too large (2MB max). Please retake the screenshot or reduce its size.",
+      paymentUploadNetworkError:
+        "A network error occurred. Please try again, or open this page in another browser such as Chrome or Safari.",
       paymentAmountDue: (amount: number) => `Amount due $${amount}`,
+    },
+    inApp: {
+      kakaoWarning:
+        "Photo uploads can fail inside the KakaoTalk in-app browser. Please open this page in an external browser.",
+      openExternal: "Open in external browser",
+      dismiss: "Close",
     },
   },
 } as const satisfies Record<Locale, unknown>;
